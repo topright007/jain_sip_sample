@@ -79,11 +79,11 @@ func main() {
 	if srv.OnRequest(sip.INVITE, onInvite) != nil {
 		panic("Failed to register invite handler")
 	}
+	err := srv.Listen("ws", "0.0.0.0:5080", nil)
+	if err != nil { panic(err) }
 	//srv.Listen("wss", "0.0.0.0:5081", &transport.TLSConfig{Cert: "certs/cert.pem", Key: "certs/key.pem"})
-	var err = srv.Listen("udp", "0.0.0.0:5060", nil)
-	if err != nil {
-		panic(err)
-	}
+	err = srv.Listen("udp", "0.0.0.0:5060", nil)
+	if err != nil { panic(err) }
 
 	logger.Info("SIP server Started")
 
