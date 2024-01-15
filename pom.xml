@@ -23,6 +23,7 @@
 		<fmj.version>1.0.2-jitsi</fmj.version>
 		<ice4j.version>3.0-59-g71e244d</ice4j.version>
 		<jain-sip-ri-ossonly.version>1.2.279-jitsi-oss1</jain-sip-ri-ossonly.version>
+		<jitsi-android-osgi.version>2.0-1-g81dca45</jitsi-android-osgi.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -126,8 +127,18 @@
 		</dependency>
 		<dependency>
 			<groupId>${jitsi-desktop.groupId}</groupId>
+			<artifactId>jitsi-dns</artifactId>
+			<version>${jitsi-desktop.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>${jitsi-desktop.groupId}</groupId>
 			<artifactId>service-netaddr</artifactId>
 			<version>${jitsi-desktop.version}</version>
+		</dependency>
+		<dependency>
+			<groupId>org.jitsi</groupId>
+			<artifactId>jitsi-android-osgi</artifactId>
+			<version>${jitsi-android-osgi.version}</version>
 		</dependency>
 
 	</dependencies>
