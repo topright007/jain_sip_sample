@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pion/logging"
 	"io"
 	"os"
 	"time"
@@ -39,8 +40,21 @@ func connectFromOffer(offerStr string) string {
 		panic("Could not find `" + audioFileName + "` or `" + videoFileName + "`")
 	}
 
+	settingEngine := webrtc.SettingEngine{}
+	settingEngine.DisableCertificateFingerprintVerification(true)
+
+	settingEngine.LoggerFactory = &logging.DefaultLoggerFactory{
+		Writer:          os.Stdout,
+		DefaultLogLevel: logging.LogLevelTrace,
+		ScopeLevels: map[string]logging.LogLevel{
+			"ice": logging.LogLevelDebug,
+		},
+	}
+
+	apiWithSettings := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
+
 	// Create a new RTCPeerConnection
-	peerConnection, err := webrtc.NewPeerConnection(webrtc.Configuration{
+	peerConnection, err := apiWithSettings.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
 				URLs: []string{"stun:stun.l.google.com:19302"},
@@ -51,11 +65,11 @@ func connectFromOffer(offerStr string) string {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		if cErr := peerConnection.Close(); cErr != nil {
-			fmt.Printf("cannot close peerConnection: %v\n", cErr)
-		}
-	}()
+	//defer func() {
+	//	if cErr := peerConnection.Close(); cErr != nil {
+	//		fmt.Printf("cannot close peerConnection: %v\n", cErr)
+	//	}
+	//}()
 
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 
@@ -108,6 +122,7 @@ func connectFromOffer(offerStr string) string {
 
 		go func() {
 			// Open a IVF file and start reading using our IVFReader
+			logger.Info("Openning video file " + videoFileName)
 			file, ivfErr := os.Open(videoFileName)
 			if ivfErr != nil {
 				panic(ivfErr)
@@ -121,13 +136,21 @@ func connectFromOffer(offerStr string) string {
 			// Wait for connection established
 			<-iceConnectedCtx.Done()
 
+			videoDurationBetweenFrames := (float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000
+			logger.Info("Peer connection established. sending video of duration ",
+				videoDurationBetweenFrames * float32(header.NumFrames),
+				" seconds. Between frames: ",
+				videoDurationBetweenFrames,
+				" milliseconds",
+			)
+
 			// Send our video file frame at a time. Pace our sending so we send it at the same speed it should be played back as.
 			// This isn't required since the video is timestamped, but we will such much higher loss if we send all at once.
 			//
 			// It is important to use a time.Ticker instead of time.Sleep because
 			// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
 			// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
-			ticker := time.NewTicker(time.Millisecond * time.Duration((float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000))
+			ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
 			for ; true; <-ticker.C {
 				frame, _, ivfErr := ivf.ParseNextFrame()
 				if errors.Is(ivfErr, io.EOF) {
@@ -235,13 +258,11 @@ func connectFromOffer(offerStr string) string {
 			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
 			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
 			fmt.Println("Peer Connection has gone to failed exiting")
-			os.Exit(0)
 		}
 
 		if s == webrtc.PeerConnectionStateClosed {
 			// PeerConnection was explicitly closed. This usually happens from a DTLS CloseNotify
-			fmt.Println("Peer Connection has gone to closed exiting")
-			os.Exit(0)
+			fmt.Println("Peer Connection has gone to closed")
 		}
 	})
 
@@ -259,7 +280,7 @@ func connectFromOffer(offerStr string) string {
 	}
 
 	// Create answer
-	answer, err := peerConnection.CreateAnswer(nil)
+	answer, err := peerConnection.CreateAnswer(&webrtc.AnswerOptions{})
 	if err != nil {
 		panic(err)
 	}
@@ -277,6 +298,9 @@ func connectFromOffer(offerStr string) string {
 	// in a production application you should exchange ICE Candidates via OnICECandidate
 	<-gatherComplete
 
+	logger.Info("Gathering complete. Answer set as local description\n" + answer.SDP)
+
+	//time.Sleep(time.Duration(30))
 	return answer.SDP
 
 	// Output the answer in base64 so we can paste it in browser
