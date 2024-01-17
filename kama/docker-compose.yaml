@@ -15,14 +15,16 @@ services:
     volumes:
       - ./kamailio:/etc/kamailio
   rtpengine:
-    image: readytalk/rtpengine-docker
+    image: freetechsolutions/rtpengine
     container_name: rtpengine
     network_mode: bridge
+    environment:
+      - "ENV=devenv"
     ports:
       - "2223:2223/udp"
       - "2224:2224"
       - "2225:2225"
-      - "30000-31000:30000-31000/udp"
+      - "30000-30020:30000-30020/udp"
     volumes:
       - ./rtpengine:/etc/rtpengine
   coturn:
@@ -35,7 +37,7 @@ services:
     ports:
       - "3478:3478"
       - "3478:3478/udp"
-      - "65435-65535:65435-65535/udp"
+      - "30050-30070:30050-30070/udp"
     volumes:
       - type: bind
         source: ./turn/turnserver.conf
