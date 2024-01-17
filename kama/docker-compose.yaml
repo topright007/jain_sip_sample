@@ -38,9 +38,12 @@ services:
       - "3478:3478"
       - "3478:3478/udp"
       - "30050-30070:30050-30070/udp"
-    volumes:
-      - type: bind
-        source: ./turn/turnserver.conf
-        target: /etc/turnserver.conf
+    environment:
+      - "ANONYMOUS=0"
+      - "USERNAME=turnuser"
+      - "PASSWORD=turnpass"
+      - "REALM=turnrealm"
+      - "MIN_PORT=30050"
+      - "MAX_PORT=30070"
 volumes:
   teleconfsrv:                                # Persistent storage
