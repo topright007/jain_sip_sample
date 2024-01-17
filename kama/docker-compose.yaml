@@ -13,11 +13,18 @@ services:
       - "5061:5061"                         # SIP TLS port
     hostname: "kamailio"
     volumes:
-      - kamailio:/etc/kamailio
+      - ./kamailio:/etc/kamailio
   rtpengine:
     image: readytalk/rtpengine-docker
     container_name: rtpengine
     network_mode: bridge
+    ports:
+      - "2223:2223/udp"
+      - "2224:2224"
+      - "2225:2225"
+      - "30000-31000:30000-31000/udp"
+    volumes:
+      - ./rtpengine:/etc/rtpengine
   coturn:
     image: nazarpc/coturn
     container_name: coturn
@@ -29,5 +36,9 @@ services:
       - "3478:3478"
       - "3478:3478/udp"
       - "65435-65535:65435-65535/udp"
+    volumes:
+      - type: bind
+        source: ./turn/turnserver.conf
+        target: /etc/turnserver.conf
 volumes:
   teleconfsrv:                                # Persistent storage
