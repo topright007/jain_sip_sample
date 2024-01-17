@@ -2,22 +2,32 @@ version: '3'
 
 #https://github.com/havfo/WEBRTC-to-SIP/blob/master/README.md
 services:
+  #https://hub.docker.com/r/kamailio/kamailio-ci
   kamailio:
-    image: telephoneorg/kamailio
-    container_name: kamailio
-    network_mode: host                    # Only here to help testing
-      #network_mode: bridge                    # Only here to help testing
-    # cap_add:
-    #   - sys_ptrace                          # Only here to help testing
-    #   - net_admin                           # Allow NFT, used by AutoBan
-    #   - net_raw                             # Allow NFT, used by AutoBan
-        #    ports:
-        # - "${SMS_PORT-8080}:${WEBSMSD_PORT:-80}" # WEBSMSD port mapping
-        # - "5060:5060/udp"                     # SIP UDP port
-        # - "5060:5060"                         # SIP TCP port
-        #- "5061:5061"                         # SIP TLS port
-        #- "5038:5038"                         # SIP TLS port
-        #- "10000-10099:10000-10099/udp"       # RTP ports
-  
+    image: kamailio/kamailio-ci:5.4-alpine.debug
+    container_name: kama
+    network_mode: bridge                    # Only here to help testing
+    ports:
+      - "5060:5060/udp"                     # SIP UDP port
+      - "5060:5060"                         # SIP TCP port
+      - "5061:5061"                         # SIP TLS port
+    hostname: "kamailio"
+    volumes:
+      - kamailio:/etc/kamailio
+  rtpengine:
+    image: readytalk/rtpengine-docker
+    container_name: rtpengine
+    network_mode: bridge
+  coturn:
+    image: nazarpc/coturn
+    container_name: coturn
+    network_mode: bridge
+    command:
+      - "--restart=always"
+      - "--name coturn"
+    ports:
+      - "3478:3478"
+      - "3478:3478/udp"
+      - "65435-65535:65435-65535/udp"
 volumes:
   teleconfsrv:                                # Persistent storage
