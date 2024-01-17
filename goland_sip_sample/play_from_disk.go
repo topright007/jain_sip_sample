@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/pion/interceptor"
 	"github.com/pion/logging"
+	"github.com/pion/sdp"
 	"io"
 	"os"
 	"time"
@@ -51,13 +53,25 @@ func connectFromOffer(offerStr string) string {
 		},
 	}
 
-	apiWithSettings := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil { panic(err) }
+
+	interceptors := &interceptor.Registry{}
+	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptors); err != nil { panic(err) }
+
+	apiWithSettings := webrtc.NewAPI(
+		webrtc.WithSettingEngine(settingEngine),
+		webrtc.WithMediaEngine(mediaEngine),
+		webrtc.WithInterceptorRegistry(interceptors),
+	)
 
 	// Create a new RTCPeerConnection
 	peerConnection, err := apiWithSettings.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
+				URLs: []string{
+					//"stun:stun.l.google.com:19302"
+				},
 			},
 		},
 	})
@@ -65,6 +79,10 @@ func connectFromOffer(offerStr string) string {
 	if err != nil {
 		panic(err)
 	}
+
+	//if _, err = peerConnection.CreateDataChannel("audio", nil) ; err != nil {panic(err)}
+	//if _, err = peerConnection.AddTransceiverFromKind(webrtc.RTPCodecTypeAudio); err != nil {panic(err)}
+
 	//defer func() {
 	//	if cErr := peerConnection.Close(); cErr != nil {
 	//		fmt.Printf("cannot close peerConnection: %v\n", cErr)
@@ -274,6 +292,24 @@ func connectFromOffer(offerStr string) string {
 	//todo: read the offer
 	//signal.Decode(signal.MustReadStdin(), &offer)
 
+	// Create channel that is blocked until ICE Gathering is complete
+	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
+	candidatesChannel := make(chan string)
+	peerConnection.OnICECandidate(func(candidate *webrtc.ICECandidate) {
+		if candidate == nil {
+			candidatesChannel <- ""
+			return
+		}
+		candidatesChannel <- fmt.Sprintf("%s %d %s %d %s %d typ %s",
+			candidate.Foundation,
+			candidate.Component,
+			candidate.TCPType,
+			candidate.Priority,
+			candidate.Address,
+			candidate.Port,
+			candidate.Typ)
+	})
+
 	// Set the remote SessionDescription
 	if err = peerConnection.SetRemoteDescription(offer); err != nil {
 		panic(err)
@@ -285,14 +321,24 @@ func connectFromOffer(offerStr string) string {
 		panic(err)
 	}
 
-	// Create channel that is blocked until ICE Gathering is complete
-	gatherComplete := webrtc.GatheringCompletePromise(peerConnection)
-
 	// Sets the LocalDescription, and starts our UDP listeners
 	if err = peerConnection.SetLocalDescription(answer); err != nil {
 		panic(err)
 	}
 
+	answerSD := sdp.SessionDescription{}
+	if err = answerSD.Unmarshal(answer.SDP); err != nil{ panic(err) }
+
+	for cand := range(candidatesChannel) {
+		if cand == "" {
+			break
+		}
+		for _, md := range(answerSD.MediaDescriptions) {
+			md.Attributes = append(md.Attributes, sdp.Attribute{Key: "candidate", Value: cand})
+		}
+	}
+
+	close(candidatesChannel)
 	// Block until ICE Gathering is complete, disabling trickle ICE
 	// we do this because we only can exchange one signaling message
 	// in a production application you should exchange ICE Candidates via OnICECandidate
@@ -301,7 +347,8 @@ func connectFromOffer(offerStr string) string {
 	logger.Info("Gathering complete. Answer set as local description\n" + answer.SDP)
 
 	//time.Sleep(time.Duration(30))
-	return answer.SDP
+
+	return answerSD.Marshal()
 
 	// Output the answer in base64 so we can paste it in browser
 	//todo: render the answer

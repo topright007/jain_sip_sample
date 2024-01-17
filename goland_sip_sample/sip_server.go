@@ -12,6 +12,9 @@ import (
 	"github.com/ghettovoice/gosip/log"
 )
 
+// examples https://medium.com/ringcentral-developers/create-a-ringcentral-softphone-in-golang-7c4b7b079ed
+// https://github.com/ringcentral/ringcentral-softphone-go
+
 var (
 	logger log.Logger
 )
@@ -41,6 +44,7 @@ func mungleOffer(offer string) string {
 			midValueCounter += 1
 			media.Attributes = append(media.Attributes, sdp.Attribute{Key: "mid", Value: strconv.Itoa(midValueCounter)})
 		}
+		media.Attributes = append(media.Attributes, sdp.Attribute{Key: "sendrecv"} )
 	}
 
 	//some dummy fingerprint. validation will be disabled
@@ -48,6 +52,28 @@ func mungleOffer(offer string) string {
 	mungledOffer := sd.Marshal()
 
 	return mungledOffer
+}
+
+func mungleAnswer(answer string) string {
+	var sd sdp.SessionDescription
+	if err := sd.Unmarshal(answer); err != nil {
+		panic("failed to unmarshal offer " + answer)
+	}
+	for _, media := range sd.MediaDescriptions {
+		newAttrs := make([]sdp.Attribute, 0)
+		for _, attr := range media.Attributes {
+			if attr.Key != "mid" {
+				newAttrs = append(newAttrs, attr)
+			}
+		}
+		media.Attributes = newAttrs
+	}
+	sd.MediaDescriptions[0].MediaName.Protos = []string{"RTP", "SAVP"}
+
+	//some dummy fingerprint. validation will be disabled
+	mungledAnswer := sd.Marshal()
+
+	return mungledAnswer
 }
 
 func onInvite(req sip.Request, tx sip.ServerTransaction) {
@@ -68,6 +94,9 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	mungledOffer := mungleOffer(req.Body())
 	logger.Info("Mungled offer ", mungledOffer)
 	answer := connectFromOffer(mungledOffer)
+
+	answer = mungleAnswer(answer)
+	logger.Info("Mungled answer ", answer)
 
 	response := sip.NewResponseFromRequest(req.MessageID(), req, 200, "I said so", answer)
 	response.AppendHeader(newCnt)
@@ -91,8 +120,8 @@ func main() {
 	if srv.OnRequest(sip.INVITE, onInvite) != nil {
 		panic("Failed to register invite handler")
 	}
-	err = srv.Listen("ws", "0.0.0.0:5080", nil)
-	if err != nil { panic(err) }
+	//err = srv.Listen("ws", "0.0.0.0:5080", nil)
+	//if err != nil { panic(err) }
 	//srv.Listen("wss", "0.0.0.0:5081", &transport.TLSConfig{Cert: "certs/cert.pem", Key: "certs/key.pem"})
 	err = srv.Listen("udp", "0.0.0.0:5060", nil)
 	if err != nil { panic(err) }
