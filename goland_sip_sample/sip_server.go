@@ -1,8 +1,12 @@
 package main
 
 import (
+	"fmt"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/pion/sdp"
+	"io"
+	"io/ioutil"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -107,12 +111,38 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	}
 }
 
+func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		fmt.Printf("could not read body: %s\n", err)
+		panic(err)
+	}
+	offerSDP := string(body)
+	fmt.Printf("got request %s\n", offerSDP)
+
+	answer := connectFromOffer(offerSDP)
+	_, err = io.WriteString(w, answer)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func setupHttpServer() {
+	http.HandleFunc("/offer", getHttpAnswer)
+	fs := http.FileServer(http.Dir("./httpStatic"))
+	http.Handle("/", fs)
+
+	if err := http.ListenAndServe(":8885", nil); err != nil {panic(err)}
+}
+
 func main() {
 	err := os.Setenv("PION_LOG_", "all")
 	if err != nil {panic(err)}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+
+	setupHttpServer()
 
 	srvConf := gosip.ServerConfig{}
 	srv := gosip.NewServer(srvConf, nil, nil, logger)

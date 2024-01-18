@@ -173,7 +173,7 @@ func connectFromOffer(offerStr string) string {
 				frame, _, ivfErr := ivf.ParseNextFrame()
 				if errors.Is(ivfErr, io.EOF) {
 					fmt.Printf("All video frames parsed and sent")
-					os.Exit(0)
+					break
 				}
 
 				if ivfErr != nil {
@@ -238,7 +238,8 @@ func connectFromOffer(offerStr string) string {
 				pageData, pageHeader, oggErr := ogg.ParseNextPage()
 				if errors.Is(oggErr, io.EOF) {
 					fmt.Printf("All audio pages parsed and sent")
-					os.Exit(0)
+					break
+					//os.Exit(0)
 				}
 
 				if oggErr != nil {
@@ -303,7 +304,7 @@ func connectFromOffer(offerStr string) string {
 		candidatesChannel <- fmt.Sprintf("%s %d %s %d %s %d typ %s",
 			candidate.Foundation,
 			candidate.Component,
-			candidate.TCPType,
+			candidate.Protocol.String(),
 			candidate.Priority,
 			candidate.Address,
 			candidate.Port,

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Sample webrtc client for chrome</title>
+
+    <script>
+        SIP_SAMPLE_HOST = "http://localhost:8885"
+
+        configuration = null;
+        var peerConnection = new RTCPeerConnection(configuration);
+        var candidates = []
+
+        var candidatesGatheredHook
+        var candidatesGatheredPromise = new Promise(function (resolve, reject) {
+            candidatesGatheredHook = resolve
+        })
+
+        peerConnection.onicecandidate = function(event) {
+            if(event.candidate === null) {
+                console.log("finished gathering candidates")
+                candidatesGatheredHook()
+                return
+            }
+            if (event.candidate) {
+                console.log("adding candidate from event " + JSON.stringify(event.candidate))
+
+                candidates.push(event.candidate)
+
+            }
+        };
+        // peerConnection.onaddstream = function(event) {
+        //     console.log("adding stream from event " + JSON.stringify(event))
+        //     document.getElementById("videoElement").srcObject = event.stream;
+        // };
+
+        peerConnection.ontrack = function(event) {
+            console.log("adding stream from event " + JSON.stringify(event))
+            if(event.track && event.track.kind && event.track.kind === "video") {
+                document.getElementById("videoElement").srcObject = event.streams[0];
+            }
+        };
+
+
+        console.log("peer connection initialized")
+
+        async function sendOffer(offerSDP) {
+            var response = await fetch(SIP_SAMPLE_HOST + "/offer", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: offerSDP
+            });
+
+            return response.text()
+        }
+
+
+        async function setUpConnection() {
+            var offer = await peerConnection.createOffer({
+                iceRestart: false,
+                offerToReceiveVideo: true,
+                offerToReceiveAudio: true
+            })
+
+            console.log("offer generated: " + offer.sdp)
+
+            await peerConnection.setLocalDescription(new RTCSessionDescription(offer))
+
+            await candidatesGatheredPromise
+
+            var answerSDP = await sendOffer(offer.sdp)
+            console.log("answer received: " + answerSDP)
+
+            await peerConnection.setRemoteDescription({
+                sdp: answerSDP,
+                type: "answer"
+            })
+
+            const constraints = {
+                video: true,audio : true
+            };
+
+        }
+
+        setUpConnection().then( _ => {
+            console.log("connection setup done")
+        })
+    </script>
+
+</head>
+<body>
+<video id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red"/>
+</body>
+</html>
