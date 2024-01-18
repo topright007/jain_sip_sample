@@ -24,12 +24,12 @@ import (
 // -i "sine=frequency=400:sample_rate=48000:duration=60" \
 // -filter_complex amerge -c:a libopus -page_duration 20000 -vn testsrc.ogg
 const (
-	audioFileName   = "/home/topright/tmp/testvid/testsrc.oggg"
+	audioFileName   = "/home/topright/tmp/testvid/testsrc.ogg"
 	videoFileName   = "/home/topright/tmp/testvid/testsrc.ivf"
 	oggPageDuration = time.Millisecond * 20
 )
 
-func startAudioPlayback(iceConnectedCtx context.Context, audioTrack *webrtc.TrackLocalStaticSample) {
+func startAudioPlayback(audioTrack *webrtc.TrackLocalStaticSample) {
 	func() {
 		// Open a OGG file and start reading using our OGGReader
 		file, oggErr := os.Open(audioFileName)
@@ -43,9 +43,6 @@ func startAudioPlayback(iceConnectedCtx context.Context, audioTrack *webrtc.Trac
 			panic(oggErr)
 		}
 
-		// Wait for connection established
-		<-iceConnectedCtx.Done()
-		logger.Info("ICE connected: audio")
 
 		// Keep track of last granule, the difference is the amount of samples in the buffer
 		var lastGranule uint64
@@ -81,7 +78,7 @@ func startAudioPlayback(iceConnectedCtx context.Context, audioTrack *webrtc.Trac
 	}()
 }
 
-func startVideoPlayback(iceConnectedCtx context.Context, videoTrack *webrtc.TrackLocalStaticSample) {
+func startVideoPlayback(videoTrack *webrtc.TrackLocalStaticSample) {
 	// Open a IVF file and start reading using our IVFReader
 	logger.Info("Openning video file " + videoFileName)
 	file, ivfErr := os.Open(videoFileName)
@@ -93,10 +90,6 @@ func startVideoPlayback(iceConnectedCtx context.Context, videoTrack *webrtc.Trac
 	if ivfErr != nil {
 		panic(ivfErr)
 	}
-
-	// Wait for connection established
-	<-iceConnectedCtx.Done()
-	logger.Info("ICE connected: video")
 
 	videoDurationBetweenFrames := (float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000
 	logger.Info("Peer connection established. sending video of duration ",
@@ -130,6 +123,36 @@ func startVideoPlayback(iceConnectedCtx context.Context, videoTrack *webrtc.Trac
 		}
 	}
 }
+
+func startVideoRender(videoTrack *webrtc.TrackLocalStaticSample) {
+	// Open a IVF file and start reading using our IVFReader
+	logger.Info("Openning video file " + videoFileName)
+
+	fps := 30
+	videoDurationBetweenFrames := float32(1000) / float32(fps)
+	logger.Info("Generating test video. Between frames: ",
+		videoDurationBetweenFrames,
+		" milliseconds",
+	)
+
+	// Send our video file frame at a time. Pace our sending so we send it at the same speed it should be played back as.
+	// This isn't required since the video is timestamped, but we will such much higher loss if we send all at once.
+	//
+	// It is important to use a time.Ticker instead of time.Sleep because
+	// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+	// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+
+	ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
+	for ; true; <-ticker.C {
+		frame := make([]byte, 10500)
+		//frame, _, ivfErr := ivf.ParseNextFrame()
+
+		if err := videoTrack.WriteSample(media.Sample{Data: frame, Duration: time.Second}); err != nil {
+			panic(err)
+		}
+	}
+}
+
 
 // nolint:gocognit
 func connectFromOffer(offerStr string) string {
@@ -240,8 +263,10 @@ func connectFromOffer(offerStr string) string {
 			}
 		}()
 
+		// Wait for connection established
+		<-iceConnectedCtx.Done()
 
-		go startVideoPlayback(iceConnectedCtx, videoTrack)
+		go startVideoPlayback(videoTrack)
 	}
 
 	if haveAudioFile {
@@ -268,7 +293,10 @@ func connectFromOffer(offerStr string) string {
 			}
 		}()
 
-		go startAudioPlayback(iceConnectedCtx, audioTrack)
+		// Wait for connection established
+		<-iceConnectedCtx.Done()
+
+		go startAudioPlayback(audioTrack)
 	}
 
 	// Set the handler for ICE connection state
