@@ -37,7 +37,9 @@
         peerConnection.ontrack = function(event) {
             console.log("adding stream from event " + JSON.stringify(event))
             if(event.track && event.track.kind && event.track.kind === "video") {
-                document.getElementById("videoElement").srcObject = event.streams[0];
+                var videoElement = document.getElementById("videoElement");
+                videoElement.srcObject = event.streams[0];
+                videoElement.play()
             }
         };
 
@@ -45,7 +47,7 @@
         console.log("peer connection initialized")
 
         async function sendOffer(offerSDP) {
-            var response = await fetch(SIP_SAMPLE_HOST + "/offer", {
+            var response = await fetch("/offer", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
@@ -96,6 +98,6 @@
 </head>
 <body>
 <button onclick="setUpConnection()">click me</button><br/>
-<video autoplay id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red; background-color: lightblue"></video>
+<video id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red; background-color: lightblue"></video>
 </body>
 </html>

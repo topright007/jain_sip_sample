@@ -24,10 +24,112 @@ import (
 // -i "sine=frequency=400:sample_rate=48000:duration=60" \
 // -filter_complex amerge -c:a libopus -page_duration 20000 -vn testsrc.ogg
 const (
-	audioFileName   = "/home/topright/tmp/testvid/testsrc.ogg"
+	audioFileName   = "/home/topright/tmp/testvid/testsrc.oggg"
 	videoFileName   = "/home/topright/tmp/testvid/testsrc.ivf"
 	oggPageDuration = time.Millisecond * 20
 )
+
+func startAudioPlayback(iceConnectedCtx context.Context, audioTrack *webrtc.TrackLocalStaticSample) {
+	func() {
+		// Open a OGG file and start reading using our OGGReader
+		file, oggErr := os.Open(audioFileName)
+		if oggErr != nil {
+			panic(oggErr)
+		}
+
+		// Open on oggfile in non-checksum mode.
+		ogg, _, oggErr := oggreader.NewWith(file)
+		if oggErr != nil {
+			panic(oggErr)
+		}
+
+		// Wait for connection established
+		<-iceConnectedCtx.Done()
+		logger.Info("ICE connected: audio")
+
+		// Keep track of last granule, the difference is the amount of samples in the buffer
+		var lastGranule uint64
+
+		// It is important to use a time.Ticker instead of time.Sleep because
+		// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+		// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+
+		//time.Sleep(time.Duration(10) * time.Second)
+
+		ticker := time.NewTicker(oggPageDuration)
+		for ; true; <-ticker.C {
+			pageData, pageHeader, oggErr := ogg.ParseNextPage()
+			if errors.Is(oggErr, io.EOF) {
+				fmt.Printf("All audio pages parsed and sent")
+				break
+				//os.Exit(0)
+			}
+
+			if oggErr != nil {
+				panic(oggErr)
+			}
+
+			// The amount of samples is the difference between the last and current timestamp
+			sampleCount := float64(pageHeader.GranulePosition - lastGranule)
+			lastGranule = pageHeader.GranulePosition
+			sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
+
+			if oggErr = audioTrack.WriteSample(media.Sample{Data: pageData, Duration: sampleDuration}); oggErr != nil {
+				panic(oggErr)
+			}
+		}
+	}()
+}
+
+func startVideoPlayback(iceConnectedCtx context.Context, videoTrack *webrtc.TrackLocalStaticSample) {
+	// Open a IVF file and start reading using our IVFReader
+	logger.Info("Openning video file " + videoFileName)
+	file, ivfErr := os.Open(videoFileName)
+	if ivfErr != nil {
+		panic(ivfErr)
+	}
+
+	ivf, header, ivfErr := ivfreader.NewWith(file)
+	if ivfErr != nil {
+		panic(ivfErr)
+	}
+
+	// Wait for connection established
+	<-iceConnectedCtx.Done()
+	logger.Info("ICE connected: video")
+
+	videoDurationBetweenFrames := (float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000
+	logger.Info("Peer connection established. sending video of duration ",
+		videoDurationBetweenFrames * float32(header.NumFrames),
+		" seconds. Between frames: ",
+		videoDurationBetweenFrames,
+		" milliseconds",
+	)
+
+	// Send our video file frame at a time. Pace our sending so we send it at the same speed it should be played back as.
+	// This isn't required since the video is timestamped, but we will such much higher loss if we send all at once.
+	//
+	// It is important to use a time.Ticker instead of time.Sleep because
+	// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+	// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+
+	ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
+	for ; true; <-ticker.C {
+		frame, _, ivfErr := ivf.ParseNextFrame()
+		if errors.Is(ivfErr, io.EOF) {
+			fmt.Printf("All video frames parsed and sent")
+			break
+		}
+
+		if ivfErr != nil {
+			panic(ivfErr)
+		}
+
+		if ivfErr = videoTrack.WriteSample(media.Sample{Data: frame, Duration: time.Second}); ivfErr != nil {
+			panic(ivfErr)
+		}
+	}
+}
 
 // nolint:gocognit
 func connectFromOffer(offerStr string) string {
@@ -138,53 +240,8 @@ func connectFromOffer(offerStr string) string {
 			}
 		}()
 
-		go func() {
-			// Open a IVF file and start reading using our IVFReader
-			logger.Info("Openning video file " + videoFileName)
-			file, ivfErr := os.Open(videoFileName)
-			if ivfErr != nil {
-				panic(ivfErr)
-			}
 
-			ivf, header, ivfErr := ivfreader.NewWith(file)
-			if ivfErr != nil {
-				panic(ivfErr)
-			}
-
-			// Wait for connection established
-			<-iceConnectedCtx.Done()
-
-			videoDurationBetweenFrames := (float32(header.TimebaseNumerator)/float32(header.TimebaseDenominator))*1000
-			logger.Info("Peer connection established. sending video of duration ",
-				videoDurationBetweenFrames * float32(header.NumFrames),
-				" seconds. Between frames: ",
-				videoDurationBetweenFrames,
-				" milliseconds",
-			)
-
-			// Send our video file frame at a time. Pace our sending so we send it at the same speed it should be played back as.
-			// This isn't required since the video is timestamped, but we will such much higher loss if we send all at once.
-			//
-			// It is important to use a time.Ticker instead of time.Sleep because
-			// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
-			// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
-			ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
-			for ; true; <-ticker.C {
-				frame, _, ivfErr := ivf.ParseNextFrame()
-				if errors.Is(ivfErr, io.EOF) {
-					fmt.Printf("All video frames parsed and sent")
-					break
-				}
-
-				if ivfErr != nil {
-					panic(ivfErr)
-				}
-
-				if ivfErr = videoTrack.WriteSample(media.Sample{Data: frame, Duration: time.Second}); ivfErr != nil {
-					panic(ivfErr)
-				}
-			}
-		}()
+		go startVideoPlayback(iceConnectedCtx, videoTrack)
 	}
 
 	if haveAudioFile {
@@ -211,51 +268,7 @@ func connectFromOffer(offerStr string) string {
 			}
 		}()
 
-		go func() {
-			// Open a OGG file and start reading using our OGGReader
-			file, oggErr := os.Open(audioFileName)
-			if oggErr != nil {
-				panic(oggErr)
-			}
-
-			// Open on oggfile in non-checksum mode.
-			ogg, _, oggErr := oggreader.NewWith(file)
-			if oggErr != nil {
-				panic(oggErr)
-			}
-
-			// Wait for connection established
-			<-iceConnectedCtx.Done()
-
-			// Keep track of last granule, the difference is the amount of samples in the buffer
-			var lastGranule uint64
-
-			// It is important to use a time.Ticker instead of time.Sleep because
-			// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
-			// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
-			ticker := time.NewTicker(oggPageDuration)
-			for ; true; <-ticker.C {
-				pageData, pageHeader, oggErr := ogg.ParseNextPage()
-				if errors.Is(oggErr, io.EOF) {
-					fmt.Printf("All audio pages parsed and sent")
-					break
-					//os.Exit(0)
-				}
-
-				if oggErr != nil {
-					panic(oggErr)
-				}
-
-				// The amount of samples is the difference between the last and current timestamp
-				sampleCount := float64(pageHeader.GranulePosition - lastGranule)
-				lastGranule = pageHeader.GranulePosition
-				sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
-
-				if oggErr = audioTrack.WriteSample(media.Sample{Data: pageData, Duration: sampleDuration}); oggErr != nil {
-					panic(oggErr)
-				}
-			}
-		}()
+		go startAudioPlayback(iceConnectedCtx, audioTrack)
 	}
 
 	// Set the handler for ICE connection state
@@ -263,6 +276,8 @@ func connectFromOffer(offerStr string) string {
 	peerConnection.OnICEConnectionStateChange(func(connectionState webrtc.ICEConnectionState) {
 		fmt.Printf("Connection State has changed %s \n", connectionState.String())
 		if connectionState == webrtc.ICEConnectionStateConnected {
+			//sleep for 1 sec to wait for the connection to be established
+			time.Sleep(time.Second * time.Duration(2))
 			iceConnectedCtxCancel()
 		}
 	})
