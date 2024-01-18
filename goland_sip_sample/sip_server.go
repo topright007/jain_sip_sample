@@ -2,18 +2,13 @@ package main
 
 import (
 	"fmt"
+	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/pion/sdp"
 	"io"
 	"io/ioutil"
 	"net/http"
-	"os"
-	"os/signal"
 	"strconv"
-	"syscall"
-
-	"github.com/ghettovoice/gosip"
-	"github.com/ghettovoice/gosip/log"
 )
 
 // examples https://medium.com/ringcentral-developers/create-a-ringcentral-softphone-in-golang-7c4b7b079ed
@@ -133,32 +128,4 @@ func setupHttpServer() {
 	http.Handle("/", fs)
 
 	if err := http.ListenAndServe(":8885", nil); err != nil {panic(err)}
-}
-
-func main() {
-	err := os.Setenv("PION_LOG_", "all")
-	if err != nil {panic(err)}
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-
-	go setupHttpServer()
-
-	srvConf := gosip.ServerConfig{}
-	srv := gosip.NewServer(srvConf, nil, nil, logger)
-
-	if srv.OnRequest(sip.INVITE, onInvite) != nil {
-		panic("Failed to register invite handler")
-	}
-	//err = srv.Listen("ws", "0.0.0.0:5080", nil)
-	//if err != nil { panic(err) }
-	//srv.Listen("wss", "0.0.0.0:5081", &transport.TLSConfig{Cert: "certs/cert.pem", Key: "certs/key.pem"})
-	err = srv.Listen("udp", "0.0.0.0:5060", nil)
-	if err != nil { panic(err) }
-
-	logger.Info("SIP server Started")
-
-	<-stop
-
-	srv.Shutdown()
 }
