@@ -3,10 +3,11 @@ version: '3'
 #https://github.com/havfo/WEBRTC-to-SIP/blob/master/README.md
 services:
   #https://hub.docker.com/r/kamailio/kamailio-ci
+  # - how to enable kamctl
   kamailio:
     image: kamailio/kamailio-ci:5.4-alpine.debug
     container_name: kama
-    network_mode: bridge                    # Only here to help testing
+#    network_mode: bridge                    # Only here to help testing
     ports:
       - "5060:5060/udp"                     # SIP UDP port
       - "5060:5060"                         # SIP TCP port
@@ -14,10 +15,11 @@ services:
     hostname: "kamailio"
     volumes:
       - ./kamailio:/etc/kamailio
+      - ./kamdb:/usr/local/kamdb
   rtpengine:
     image: freetechsolutions/rtpengine
     container_name: rtpengine
-    network_mode: bridge
+#    network_mode: bridge
     environment:
       - "ENV=devenv"
     ports:
@@ -30,7 +32,7 @@ services:
   coturn:
     image: nazarpc/coturn
     container_name: coturn
-    network_mode: bridge
+#    network_mode: bridge
     command:
       - "--restart=always"
       - "--name coturn"
