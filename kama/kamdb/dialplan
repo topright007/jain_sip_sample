@@ -1,0 +1,4 @@
+id(int,auto) dpid(int) pr(int) match_op(int) match_exp(string) match_len(int) subst_exp(string) repl_exp(string) attrs(string) 
+
+:10:10:1:^_.*$:0:::route=tmost-sipgw:To telemost
+:10:10:1:^Domain-telemost$:0:::route=tmost-sipgw-prod;from_domain=yandex.net:To telemost
