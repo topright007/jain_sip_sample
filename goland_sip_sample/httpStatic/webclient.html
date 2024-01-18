@@ -84,13 +84,18 @@
 
         }
 
-        setUpConnection().then( _ => {
-            console.log("connection setup done")
-        })
+        setInterval(() => {
+            console.log("currently decoded: " + document.getElementById("videoElement").framesDecoded )
+        },1000)
+
+        // setUpConnection().then( _ => {
+        //     console.log("connection setup done")
+        // })
     </script>
 
 </head>
 <body>
-<video id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red"/>
+<button onclick="setUpConnection()">click me</button><br/>
+<video autoplay id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red; background-color: lightblue"></video>
 </body>
 </html>
