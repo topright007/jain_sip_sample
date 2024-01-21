@@ -24,6 +24,9 @@ import (
 	"unsafe"
 )
 
+
+//example: https://github.com/pwaller/go-ffmpeg-video-encoding/blob/master/ffmpeg.go
+//directly in ffmpeg: https://stackoverflow.com/questions/35569830/correctly-allocate-and-fill-frame-in-ffmpeg
 const (
 	CODEC_ID_H264 = C.AV_CODEC_ID_H264
 )
@@ -50,6 +53,11 @@ func init() {
 func ptr(buf []byte) *C.uint8_t {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&buf))
 	return (*C.uint8_t)(unsafe.Pointer(h.Data))
+}
+
+func dptr(buf []byte) **C.uint8_t {
+	h := (*reflect.SliceHeader)(unsafe.Pointer(&buf))
+	return (**C.uint8_t)(unsafe.Pointer(h.Data))
 }
 
 
@@ -131,27 +139,39 @@ func NewEncoder(codec uint32, in image.Image, out io.Writer) (*Encoder, error) {
 func (e *Encoder) WriteFrame() error {
 	e._frame.pts = C.int64_t(e._context.frame_number)
 
-	var input_data [3]*C.uint8_t
+	var input_data **C.uint8_t
 	var input_linesize [3]C.int
 
 	switch im := e.im.(type) {
 	case *image.RGBA:
 		bpp := 4
-		input_data = [3]*C.uint8_t{ptr(im.Pix)}
+		input_data = dptr(im.Pix)
 		input_linesize = [3]C.int{C.int(e.im.Bounds().Dx() * bpp)}
 	case *image.NRGBA:
 		bpp := 4
-		input_data = [3]*C.uint8_t{ptr(im.Pix)}
+		input_data = dptr(im.Pix)
 		input_linesize = [3]C.int{C.int(e.im.Bounds().Dx() * bpp)}
 	default:
 		panic("Unknown input image type")
 	}
 
 	// Perform scaling from input type to output type
-	C.sws_scale(e._swscontext, &input_data[0], &input_linesize[0],
-		0, e._context.height,
-		&e._frame.data[0], &e._frame.linesize[0])
-
+	C.sws_scale(
+		e._swscontext,
+		//nil,
+		(input_data),
+		&input_linesize[0],
+		//&input_data[0],nil,
+		//&input_linesize[0],
+		0,
+		e._context.height,
+		&e._frame.data[0],
+		&e._frame.linesize[0],
+		)
+	//C.sws_scale(e._swscontext, &input_data[0], &input_linesize[0],
+	//	0, e._context.height,
+	//	&e._frame.data[0], &e._frame.linesize[0])
+	//print("", len(input_linesize), " ", input_data)
 	//outsize := C.avcodec_encode_video(e._context, ptr(e._outbuf),
 	//	C.int(len(e._outbuf)), e._frame)
 
