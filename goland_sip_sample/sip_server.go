@@ -115,7 +115,12 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 	offerSDP := string(body)
 	fmt.Printf("got request %s\n", offerSDP)
 
-	answer := connectFromOffer(offerSDP)
+	//answer := connectFromOffer(offerSDP)
+	var vmi = VoiceMenuInstance{}
+	answer := vmi.connect(offerSDP)
+
+	go vmi.StartVideoPlayback()
+
 	_, err = io.WriteString(w, answer)
 	if err != nil {
 		panic(err)
@@ -123,6 +128,8 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 }
 
 func setupHttpServer() {
+	initH264Encoder()
+
 	http.HandleFunc("/offer", getHttpAnswer)
 	fs := http.FileServer(http.Dir("./httpStatic"))
 	http.Handle("/", fs)

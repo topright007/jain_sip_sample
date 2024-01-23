@@ -85,13 +85,12 @@ func (e *Encoder) initPacket(packet H264Packet, streamIndex int) {
 	C.av_init_packet(avPacket)
 	avPacket.data = e._outbuf
 	avPacket.size = e._outbuflen
-	avPacket.stream_index = C.int(streamIndex)
-	avPacket.flags |= C.AV_PKT_FLAG_KEY
 }
 
-func init() {
+func initH264Encoder() {
 	C.avcodec_register_all()
-	C.av_log_set_level(C.AV_LOG_DEBUG)
+	C.av_log_set_level(C.AV_LOG_WARNING)
+	//C.av_log_set_level(C.AV_LOG_DEBUG)
 }
 
 func ptr(buf []byte) *C.uint8_t {
@@ -154,7 +153,7 @@ func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
 	avContext.width = C.int(width)
 	avContext.height = C.int(height)
 	avContext.time_base = C.AVRational{1, 30} // FPS
-	avContext.gop_size = 10                   // emit one intra frame every ten frames
+	avContext.gop_size = 100                   // emit one intra frame every ten frames
 	avContext.max_b_frames = 0
 
 	avContext.pix_fmt = C.AV_PIX_FMT_YUV420P
@@ -205,7 +204,7 @@ func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
 	return e, nil
 }
 
-func (e *Encoder) WriteFrame(avPacket *C.AVPacket) (error, int) {
+func (e *Encoder) WriteFrame(avPacket H264Packet) (error, int) {
 	e._frame.pts = C.int64_t(e._context.frame_number)
 
 	err, outSize := doEncodeVideo(e, avPacket)
@@ -264,4 +263,15 @@ func (e *Encoder) Close() {
 	C.av_free(unsafe.Pointer(e._outbuf))
 	C.freeWrappedArray(e._input_data)
 	e._frame, e._codec = nil, nil
+}
+
+func avPacketToSlice(avPacket H264Packet) []byte {
+	packet := (*C.AVPacket)(avPacket)
+	length := int(packet.size)
+	var list []byte
+	sliceHeader := (*reflect.SliceHeader)((unsafe.Pointer(&list)))
+	sliceHeader.Cap = length
+	sliceHeader.Len = length
+	sliceHeader.Data = uintptr(unsafe.Pointer(packet.data))
+	return list
 }

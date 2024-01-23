@@ -35,7 +35,7 @@ import (
 )
 
 func addLabel(img *image.RGBA, x, y int, label string) {
-	col := color.RGBA{200, 100, 0, 255}
+	col := RGBA_COLOR_YANDEX_ORANGE
 	point := fixed.Point26_6{fixed.I(x), fixed.I(y)}
 
 	d := &font.Drawer{
@@ -47,7 +47,7 @@ func addLabel(img *image.RGBA, x, y int, label string) {
 	d.DrawString(label)
 }
 
-func main() {
+func main1() {
 
 	f := C.fopen(C.CString("result.mpeg"), C.CString("w"))
 	defer C.fclose(f)
@@ -91,7 +91,7 @@ func main() {
 	log.Printf("Took %s", time.Since(start))
 }
 
-func main1() {
+func main() {
 	err := os.Setenv("PION_LOG_", "all")
 	if err != nil {
 		panic(err)
