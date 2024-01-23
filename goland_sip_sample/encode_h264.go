@@ -3,6 +3,8 @@ package main
 import "C"
 import (
 	"fmt"
+	"image"
+	"image/color"
 	"log"
 	"reflect"
 	"unsafe"
@@ -47,8 +49,13 @@ type Encoder struct {
 	_context    *C.AVCodecContext
 	_swscontext *C.SwsContext
 	_frame      *C.AVFrame
+
 	_outbuf     *C.uint8_t
 	_outbuflen  C.int
+
+	inputImage  *image.RGBA
+	_input_data **C.uint8_t
+	_input_linesize [1]C.int
 }
 
 type H264Packet *C.AVPacket
@@ -80,9 +87,6 @@ func (e *Encoder) initPacket(packet H264Packet, streamIndex int) {
 	avPacket.size = e._outbuflen
 	avPacket.stream_index = C.int(streamIndex)
 	avPacket.flags |= C.AV_PKT_FLAG_KEY
-
-	drawBoxFrame(e._frame, 0, 0, 640, 480, yuvColor(0, 0, 0))
-	drawBoxFrame(e._frame, 10+streamIndex, 10, 100, 100, yuvColor(125, 0, 0))
 }
 
 func init() {
@@ -117,11 +121,25 @@ var DefaultEncoderOptions = EncoderOptions{
     c.pix_fmt = C.PIX_FMT_RGB
 } */
 
-func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
+type YCbCrWithSet struct {
+	image.YCbCr
+}
+
+func (p *YCbCrWithSet) Set(x int, y int, c color.Color) {
+	c1 := color.YCbCrModel.Convert(c).(color.YCbCr)
+	p.Y[p.YOffset(x,y)] = c1.Y
+	p.Cb[p.COffset(x,y)] = c1.Cb
+	p.Cr[p.COffset(x,y)] = c1.Cr
+}
+
+func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
 	_codec := C.avcodec_find_encoder(codec)
 	if _codec == nil {
 		return nil, fmt.Errorf("could not find codec")
 	}
+
+	width := inputImage.Bounds().Dx()
+	height := inputImage.Bounds().Dy()
 
 	avContext := C.avcodec_alloc_context3(_codec)
 	avContext.bit_rate = 400000
@@ -146,21 +164,18 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 	if avFrame == nil {
 		panic("Failed to allicate avFrame")
 	}
-	avFrameData := [8]*C.uint8_t{}
-	avFrameLinesizes := [8]C.int32_t{}
-	C.av_image_alloc(&avFrameData[0], &avFrameLinesizes[0], avContext.width, avContext.height, C.AV_PIX_FMT_YUV420P, C.int(1))
+
 	avFrame.format = C.AV_PIX_FMT_YUV420P
 	avFrame.width = avContext.width
 	avFrame.height = avContext.height
+
+
+	//from AV
+	avFrameData := [8]*C.uint8_t{}
+	avFrameLinesizes := [8]C.int32_t{}
+	C.av_image_alloc(&avFrameData[0], &avFrameLinesizes[0], avContext.width, avContext.height, C.AV_PIX_FMT_YUV420P, C.int(1))
 	avFrame.data = avFrameData
 	avFrame.linesize = avFrameLinesizes
-
-	size := C.avpicture_get_size(C.AV_PIX_FMT_YUV420P, avContext.width, avContext.height)
-	picture_buf := (*C.uint8_t)(C.av_malloc(C.uint64_t(size)))
-	if picture_buf == nil {
-		C.av_free(unsafe.Pointer(avFrame))
-		panic("Failed to allocate picture buf")
-	}
 
 	if C.avcodec_open2(avContext, _codec, nil) < 0 {
 		return nil, fmt.Errorf("could not open codec")
@@ -172,6 +187,9 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 	videoEncodeBufLen := C.int(1024 * 1024)
 	videoEncodeBuf := (*C.uint8_t)(C.av_malloc(C.ulong(videoEncodeBufLen)))
 
+
+	input_data := (**C.uint8_t)(C.wrapWithArray(ptr(inputImage.Pix)))
+	input_linesize := [1]C.int{C.int(inputImage.Bounds().Dx() * 4)}
 	e := &Encoder{
 		codec,
 		_codec,
@@ -180,6 +198,9 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 		avFrame,
 		videoEncodeBuf,
 		videoEncodeBufLen,
+		inputImage,
+		input_data,
+		input_linesize,
 	}
 	return e, nil
 }
@@ -198,6 +219,11 @@ func (e *Encoder) WriteFrame(avPacket *C.AVPacket) (error, int) {
 func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
 
 	gotPacketStr := C.int(0)
+
+	C.sws_scale(e._swscontext, e._input_data, &e._input_linesize[0],
+		0, e._context.height,
+		&e._frame.data[0], &e._frame.linesize[0])
+
 	var successInt C.int = C.avcodec_encode_video2(
 		e._context,
 		packet,
@@ -236,5 +262,6 @@ func (e *Encoder) Close() {
 	C.av_free(unsafe.Pointer(e._frame.data[0]))
 	C.av_free(unsafe.Pointer(e._frame))
 	C.av_free(unsafe.Pointer(e._outbuf))
+	C.freeWrappedArray(e._input_data)
 	e._frame, e._codec = nil, nil
 }

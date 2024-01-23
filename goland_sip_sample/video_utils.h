@@ -23,4 +23,7 @@ YUVColor yuv_color(uint8_t y, uint8_t u, uint8_t v);
 
 void draw_box(AVPicture *picture, uint32_t x, uint32_t y, uint32_t width, uint32_t height, YUVColor yuv_color);
 
+uint8_t** wrapWithArray(uint8_t* imagePlane);
+void freeWrappedArray(uint8_t** imagePlane);
+
 #endif //_TOPRIGHT_SAMPLE_FFMPEG_ENCODER_

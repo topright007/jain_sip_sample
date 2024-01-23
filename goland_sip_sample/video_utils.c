@@ -24,3 +24,13 @@ void draw_box(AVPicture *picture, uint32_t x, uint32_t y, uint32_t width, uint32
          set_pixel(picture, yuv_color, cx, cy);
        }
 }
+
+uint8_t** wrapWithArray(uint8_t* imagePlane) {
+    uint8_t** result = malloc(sizeof(uint8_t*));
+    result[0] = imagePlane;
+    return result;
+}
+
+void freeWrappedArray(uint8_t** imagePlane) {
+    free(imagePlane);
+}

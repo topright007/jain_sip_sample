@@ -8,6 +8,7 @@ package main
 import "C"
 
 import (
+	"fmt"
 	//"github.com/ghettovoice/gosip"
 	//"github.com/ghettovoice/gosip/sip"
 	//"os"
@@ -15,6 +16,12 @@ import (
 	//"syscall"
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
+	"image"
+	"image/color"
+	"image/draw"
 	"unsafe"
 
 	//"image"
@@ -28,19 +35,25 @@ import (
 	//"unsafe"
 )
 
+func addLabel(img *image.RGBA, x, y int, label string) {
+	col := color.RGBA{200, 100, 0, 255}
+	point := fixed.Point26_6{fixed.I(x), fixed.I(y)}
+
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(col),
+		Face: basicfont.Face7x13,
+		Dot:  point,
+	}
+	d.DrawString(label)
+}
+
 func main() {
-
-	//f, err := os.Create("test.mpeg")
-	//if err != nil {
-	//	log.Panicf("Unable to open output file: %q", err)
-	//}
-
-	//im := image.NewRGBA(image.Rect(0, 0, 640, 480))
 
 	f := C.fopen(C.CString("result.mpeg"), C.CString("w"))
 	defer C.fclose(f)
 
-	e, err := NewEncoder(CODEC_ID_H264, 640, 480)
+	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)))
 	defer e.Close()
 
 	if err != nil {
@@ -56,6 +69,13 @@ func main() {
 		//c := color.RGBA{0, 0, uint8(i % 255), 255}
 		// uint8(i%255), uint8(i%255), 255}
 		//draw.Draw(im, im.Bounds(), &image.Uniform{c}, image.ZP, draw.Src)
+
+		myred := color.RGBA{200, 0, 0, 100}
+		myBlack := color.RGBA{0, 0, 0, 100}
+		draw.Draw(e.inputImage, image.Rect(0, 0, e.inputImage.Rect.Max.X, e.inputImage.Rect.Max.Y), &image.Uniform{myBlack}, image.Point{}, draw.Src)
+		draw.Draw(e.inputImage, image.Rect(60+i, 80, 120+i, 160), &image.Uniform{myred}, image.Point{}, draw.Src)
+
+		addLabel(e.inputImage, 400 + i, 500, "heyhey")
 
 		e.initPacket(avPacket, i)
 		err, outSize := e.WriteFrame(avPacket)
