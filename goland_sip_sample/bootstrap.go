@@ -8,7 +8,6 @@ package main
 import "C"
 
 import (
-	"fmt"
 	//"github.com/ghettovoice/gosip"
 	//"github.com/ghettovoice/gosip/sip"
 	//"os"
