@@ -1,8 +1,18 @@
 package main
 
-// #include <libavcodec/avcodec.h>
+import "C"
+import (
+	"fmt"
+	"log"
+	"reflect"
+	"unsafe"
+)
+
+// #cgo CFLAGS: -g -w
+//#include <libavcodec/avcodec.h>
 // #include <libswscale/swscale.h>
 // #include <libavutil/imgutils.h>
+// #include "video_utils.h"
 //
 // // ... yes. Don't ask.
 // typedef struct SwsContext SwsContext;
@@ -13,28 +23,22 @@ package main
 //
 // #cgo pkg-config: libavdevice libavformat libavfilter libavcodec libswscale libavutil
 import "C"
+
 //sudo apt install libavdevice-dev
 
 import (
 	"errors"
-	"fmt"
-	//"image"
-	//"io"
-	"log"
-	"reflect"
-	"unsafe"
 )
 
-
-//example: https://github.com/pwaller/go-ffmpeg-video-encoding/blob/master/ffmpeg.go
-//directly in ffmpeg: https://stackoverflow.com/questions/35569830/correctly-allocate-and-fill-frame-in-ffmpeg
-//https://github.com/UnickSoft/FFmpeg-encode-example/blob/master/ffmpegEncoder/VideoEncoder.cpp#L121 - one more example
+// example: https://github.com/pwaller/go-ffmpeg-video-encoding/blob/master/ffmpeg.go
+// directly in ffmpeg: https://stackoverflow.com/questions/35569830/correctly-allocate-and-fill-frame-in-ffmpeg
+// https://github.com/UnickSoft/FFmpeg-encode-example/blob/master/ffmpegEncoder/VideoEncoder.cpp#L121 - one more example
 const (
 	CODEC_ID_H264 = C.AV_CODEC_ID_H264
 )
 
 type Encoder struct {
-	codec         uint32
+	codec uint32
 	//im            image.Image
 	//underlying_im image.Image
 	//Output        io.Writer
@@ -43,9 +47,43 @@ type Encoder struct {
 	_context    *C.AVCodecContext
 	_swscontext *C.SwsContext
 	_frame      *C.AVFrame
-	_outbuf     []byte
+	_outbuf     *C.uint8_t
+	_outbuflen  C.int
 }
 
+type H264Packet *C.AVPacket
+
+func (e *Encoder) allocPacket() (packet H264Packet, cancel func()) {
+	avPacket := (*C.AVPacket)(packet)
+	avPacket = C.av_packet_alloc()
+	return avPacket, func() {
+		C.av_packet_free(&avPacket)
+	}
+}
+
+func yuvColor(y int, u int, v int) C.YUVColor {
+	return C.yuv_color(C.uint8_t(y), C.uint8_t(u), C.uint8_t(v))
+}
+
+func drawBoxFrame(pic *C.AVFrame, x int, y int, width int, height int, color C.YUVColor) {
+	drawBox((*C.AVPicture)(unsafe.Pointer(pic)), x, y, width, height, color)
+}
+
+func drawBox(pic *C.AVPicture, x int, y int, width int, height int, color C.YUVColor) {
+	C.draw_box(pic, C.uint32_t(x), C.uint32_t(y), C.uint32_t(width), C.uint32_t(height), color)
+}
+
+func (e *Encoder) initPacket(packet H264Packet, streamIndex int) {
+	avPacket := (*C.AVPacket)(packet)
+	C.av_init_packet(avPacket)
+	avPacket.data = e._outbuf
+	avPacket.size = e._outbuflen
+	avPacket.stream_index = C.int(streamIndex)
+	avPacket.flags |= C.AV_PKT_FLAG_KEY
+
+	drawBoxFrame(e._frame, 0, 0, 640, 480, yuvColor(0, 0, 0))
+	drawBoxFrame(e._frame, 10+streamIndex, 10, 100, 100, yuvColor(125, 0, 0))
+}
 
 func init() {
 	C.avcodec_register_all()
@@ -61,7 +99,6 @@ func dptr(buf []byte) **C.uint8_t {
 	h := (*reflect.SliceHeader)(unsafe.Pointer(&buf))
 	return (**C.uint8_t)(unsafe.Pointer(h.Data))
 }
-
 
 /*
 type EncoderOptions struct {
@@ -104,12 +141,6 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 
 	avContext.pix_fmt = C.AV_PIX_FMT_YUV420P
 	avContext.bit_rate = C.long(400000)
-	//avFrame.data[0] = ptr(underlying_im.Y)
-	//avFrame.data[1] = ptr(underlying_im.Cb)
-	//avFrame.data[2] = ptr(underlying_im.Cr)
-	//avFrame.linesize[0] = w
-	//avFrame.linesize[1] = w / 2
-	//avFrame.linesize[2] = w / 2
 
 	avFrame := C.av_frame_alloc()
 	if avFrame == nil {
@@ -124,13 +155,12 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 	avFrame.data = avFrameData
 	avFrame.linesize = avFrameLinesizes
 
-	size := C.avpicture_get_size(C.AV_PIX_FMT_YUV420P, avContext.width, avContext.height);
-	picture_buf := (*C.uint8_t)(C.av_malloc(C.uint64_t(size)));
+	size := C.avpicture_get_size(C.AV_PIX_FMT_YUV420P, avContext.width, avContext.height)
+	picture_buf := (*C.uint8_t)(C.av_malloc(C.uint64_t(size)))
 	if picture_buf == nil {
 		C.av_free(unsafe.Pointer(avFrame))
 		panic("Failed to allocate picture buf")
 	}
-
 
 	if C.avcodec_open2(avContext, _codec, nil) < 0 {
 		return nil, fmt.Errorf("could not open codec")
@@ -139,101 +169,33 @@ func NewEncoder(codec uint32, width int, height int) (*Encoder, error) {
 	_swscontext := C.sws_getContext(avContext.width, avContext.height, C.AV_PIX_FMT_RGB0, avContext.width, avContext.height, C.AV_PIX_FMT_YUV420P,
 		C.SWS_BICUBIC, nil, nil, nil)
 
+	videoEncodeBufLen := C.int(1024 * 1024)
+	videoEncodeBuf := (*C.uint8_t)(C.av_malloc(C.ulong(videoEncodeBufLen)))
+
 	e := &Encoder{
 		codec,
 		_codec,
 		avContext,
 		_swscontext,
 		avFrame,
-		make([]byte, 16*1024),
+		videoEncodeBuf,
+		videoEncodeBufLen,
 	}
 	return e, nil
 }
 
-func (e *Encoder) WriteFrame() error {
+func (e *Encoder) WriteFrame(avPacket *C.AVPacket) (error, int) {
 	e._frame.pts = C.int64_t(e._context.frame_number)
 
-	avPacket := C.av_packet_alloc()
-	nSizeVideoEncodeBuffer := C.int(100000000)
-	ret := C.av_new_packet(avPacket, nSizeVideoEncodeBuffer)
-	if ret != 0 {
-		panic(fmt.Sprintf("failed to init a packet %d", ret))
+	err, outSize := doEncodeVideo(e, avPacket)
+	if err != nil {
+		panic(err)
 	}
 
-	defer C.av_packet_unref(avPacket)
-
-
-
-	//var input_data **C.uint8_t
-	//var input_linesize [3]C.int
-
-	//switch im := e.im.(type) {
-	//case *image.RGBA:
-	//	bpp := 4
-	//	input_data = dptr(im.Pix)
-	//	input_linesize = [3]C.int{C.int(e.im.Bounds().Dx() * bpp)}
-	//case *image.NRGBA:
-	//	bpp := 4
-	//	input_data = dptr(im.Pix)
-	//	input_linesize = [3]C.int{C.int(e.im.Bounds().Dx() * bpp)}
-	//default:
-	//	panic("Unknown input image type")
-	//}
-
-	// Perform scaling from input type to output type
-	//C.sws_scale(
-	//	e._swscontext,
-	//	//nil,
-	//	(input_data),
-	//	&input_linesize[0],
-	//	//&input_data[0],nil,
-	//	//&input_linesize[0],
-	//	0,
-	//	e._context.height,
-	//	&e._frame.data[0],
-	//	&e._frame.linesize[0],
-	//	)
-	//C.sws_scale(e._swscontext, &input_data[0], &input_linesize[0],
-	//	0, e._context.height,
-	//	&e._frame.data[0], &e._frame.linesize[0])
-	//print("", len(input_linesize), " ", input_data)
-	//outsize := C.avcodec_encode_video(e._context, ptr(e._outbuf),
-	//	C.int(len(e._outbuf)), e._frame)
-
-	if err := doEncodeVideo(e, avPacket); err != nil {panic(err)}
-
-	outsize := int(avPacket.size)
-	logger.Info("encoded frame of size ", outsize)
-	if outsize == 0 {
-		return nil
-	}
-
-	//n, err := e.Output.Write(e._outbuf[:outsize])
-	//if err != nil {
-	//	return err
-	//}
-	//if n < int(outsize) {
-	//	return fmt.Errorf("Short write, expected %d, wrote %d", outsize, n)
-	//}
-
-	return nil
+	return nil, outSize
 }
 
-func doEncodeVideo(e *Encoder, packet *C.AVPacket) error {
-	//nSizeVideoEncodeBuffer := C.int(10000000)
-	//var packet C.AVPacket
-	//ret := C.av_new_packet(&packet, nSizeVideoEncodeBuffer)
-	//if ret != 0 {
-	//	panic(fmt.Sprintf("failed to init a packet %d", ret))
-	//}
-	////pVideoEncodeBuffer := (*C.uint8_t)(C.av_malloc(C.ulong(nSizeVideoEncodeBuffer)));
-	//defer C.av_packet_unref(&packet)
-
-
-	//packet.data = pVideoEncodeBuffer
-	//packet.size = nSizeVideoEncodeBuffer
-
-	//C.av_init_packet(packet)
+func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
 
 	gotPacketStr := C.int(0)
 	var successInt C.int = C.avcodec_encode_video2(
@@ -244,40 +206,35 @@ func doEncodeVideo(e *Encoder, packet *C.AVPacket) error {
 	)
 
 	if int(successInt) != 0 {
-		return errors.New(fmt.Sprintf("failed to call avcodec_encode_video: %d. result length: %d", successInt, gotPacketStr))
+		return errors.New(fmt.Sprintf(
+				"failed to call avcodec_encode_video: %d. result length: %d",
+				successInt,
+				gotPacketStr,
+			)),
+			0
 	}
-	logger.Info("successfully encoded frame. result len: ", gotPacketStr)
 
-	return nil
+	if gotPacketStr == 0 {
+		logger.Info("Frame not encoded by libavicodec")
+		return nil, -1
+	}
+
+	logger.Info("successfully encoded frame."+
+		"\npresentation ts: ", packet.pts,
+		"\nstream index: ", packet.stream_index,
+		"\npacket duration: ", packet.duration,
+		"\nresult len: ", packet.size,
+	)
+
+	return nil, int(packet.size)
 }
 
 func (e *Encoder) Close() {
-
-	// Process "delayed" frames
-	//for {
-		//if err := doEncodeVideo(e); err != nil {panic(err)}
-		//outsize := int(e._avPacket.size)
-		//if outsize == 0 {
-		//	break
-		//}
-
-		//n, err := e.Output.Write(e._outbuf[:outsize])
-		//if err != nil {
-		//	panic(err)
-		//}
-		//if n < int(outsize) {
-		//	panic(fmt.Errorf("Short write, expected %d, wrote %d", outsize, n))
-		//}
-	//}
-
-	//n, err := e.Output.Write([]byte{0, 0, 1, 0xb7})
-	//if err != nil || n != 4 {
-	//	log.Panicf("Error finishing mpeg file: %q; n = %d", err, n)
-	//}
 
 	C.avcodec_close((*C.AVCodecContext)(unsafe.Pointer(e._context)))
 	C.av_free(unsafe.Pointer(e._context))
 	C.av_free(unsafe.Pointer(e._frame.data[0]))
 	C.av_free(unsafe.Pointer(e._frame))
+	C.av_free(unsafe.Pointer(e._outbuf))
 	e._frame, e._codec = nil, nil
 }
