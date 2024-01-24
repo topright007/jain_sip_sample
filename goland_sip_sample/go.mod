@@ -4,6 +4,7 @@ go 1.21
 
 require (
 	github.com/ghettovoice/gosip v0.0.0-20231227123312-6b80e2d3e6f7
+	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0
 	github.com/pion/interceptor v0.1.25
 	github.com/pion/logging v0.2.2
 	github.com/pion/sdp v1.3.0

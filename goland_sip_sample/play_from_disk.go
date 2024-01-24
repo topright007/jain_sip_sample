@@ -26,7 +26,6 @@ import (
 const (
 	audioFileName   = "/home/topright/tmp/testvid/testsrc.ogg"
 	videoFileName   = "/home/topright/tmp/testvid/testsrc.ivf"
-	oggPageDuration = time.Millisecond * 20
 )
 
 func startAudioPlayback(audioTrack *webrtc.TrackLocalStaticSample) {
@@ -53,7 +52,7 @@ func startAudioPlayback(audioTrack *webrtc.TrackLocalStaticSample) {
 
 		//time.Sleep(time.Duration(10) * time.Second)
 
-		ticker := time.NewTicker(oggPageDuration)
+		ticker := time.NewTicker(audioOggPageDuration)
 		for ; true; <-ticker.C {
 			pageData, pageHeader, oggErr := ogg.ParseNextPage()
 			if errors.Is(oggErr, io.EOF) {

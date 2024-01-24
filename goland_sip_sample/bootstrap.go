@@ -15,6 +15,7 @@ import (
 	//"syscall"
 	"github.com/ghettovoice/gosip"
 	"github.com/ghettovoice/gosip/sip"
+	"github.com/golang/freetype/truetype"
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	"golang.org/x/image/math/fixed"
@@ -34,14 +35,24 @@ import (
 	//"unsafe"
 )
 
-func addLabel(img *image.RGBA, x, y int, label string) {
-	col := RGBA_COLOR_ORANGE
+func addLabel(vmr *VoiceMenuResources, img *image.RGBA, x, y int, label string, col color.Color) {
 	point := fixed.Point26_6{fixed.I(x), fixed.I(y)}
+
+	var face font.Face
+	if vmr != nil {
+		face = truetype.NewFace(vmr.defaultFont, &truetype.Options{
+			Size:    20.0,
+			DPI:     72.0,
+			Hinting: font.HintingNone,
+		})
+	} else {
+		face = basicfont.Face7x13
+	}
 
 	d := &font.Drawer{
 		Dst:  img,
 		Src:  image.NewUniform(col),
-		Face: basicfont.Face7x13,
+		Face: face,
 		Dot:  point,
 	}
 	d.DrawString(label)
@@ -74,7 +85,7 @@ func main1() {
 		draw.Draw(e.inputImage, image.Rect(0, 0, e.inputImage.Rect.Max.X, e.inputImage.Rect.Max.Y), &image.Uniform{myBlack}, image.Point{}, draw.Src)
 		draw.Draw(e.inputImage, image.Rect(60+i, 80, 120+i, 160), &image.Uniform{myred}, image.Point{}, draw.Src)
 
-		addLabel(e.inputImage, 400 + i, 500, "heyhey")
+		addLabel(nil, e.inputImage, 400 + i, 500, "heyhey", RGBA_COLOR_ORANGE)
 
 		e.initPacket(avPacket, i)
 		err, outSize := e.WriteFrame(avPacket)

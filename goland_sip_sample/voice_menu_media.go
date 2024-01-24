@@ -11,10 +11,13 @@ import (
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
+	"github.com/golang/freetype/truetype"
 	"image"
 	"image/color"
 	"image/draw"
 	"io"
+	"io/ioutil"
+	"log"
 	"os"
 	"time"
 )
@@ -22,6 +25,7 @@ import (
 const (
 	greetingAudioFileName   = "./resources/greeting.ogg"
 	dtmfAudioFileName   	= "./resources/dtmf.ogg"
+	fontFile			   	= "/usr/share/fonts/truetype/JetBrainsMono/JetBrainsMono-Regular.ttf"
 	audioOggPageDuration = time.Millisecond * 20
 )
 
@@ -42,6 +46,7 @@ type OggAudioPage struct {
 type VoiceMenuResources struct {
 	greetingAudioPages	[]OggAudioPage
 	dtmfAudioPages		[]OggAudioPage
+	defaultFont			*truetype.Font
 }
 
 func readOggFile(path string) []OggAudioPage {
@@ -72,6 +77,19 @@ func readOggFile(path string) []OggAudioPage {
 func (vrm *VoiceMenuResources) init() {
 	vrm.dtmfAudioPages 		= readOggFile(dtmfAudioFileName)
 	vrm.greetingAudioPages	= readOggFile(greetingAudioFileName)
+
+	fontBytes, err := ioutil.ReadFile(fontFile)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	f, err := truetype.Parse(fontBytes)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+
+	vrm.defaultFont = f
 }
 
 
@@ -309,7 +327,7 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) s
 }
 
 func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage ) {
-	ticker := time.NewTicker(oggPageDuration)
+	ticker := time.NewTicker(audioOggPageDuration)
 	var lastGranule uint64
 	totalPages := len(track)
 
@@ -386,8 +404,9 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 
 		draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
 		draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
-		addLabel(inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!")
-		addLabel(inputImage, 200, 200, fmt.Sprintf("Frame number %d", i))
+		addLabel(vmi._vmr, inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!", RGBA_COLOR_ORANGE)
+		addLabel(vmi._vmr, inputImage, 200, 200, fmt.Sprintf("Frame number %d", i), RGBA_COLOR_ORANGE)
+		addLabel(vmi._vmr, inputImage, 200, 300, "public void JetBrainsMonoSpace(int here) { print(\"Hello World!\"); }", RGBA_COLOR_BLACK)
 
 		//sometimes ffmpeg skips frames
 
