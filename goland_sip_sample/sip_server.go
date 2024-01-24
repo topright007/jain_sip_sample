@@ -92,7 +92,7 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	//}
 	mungledOffer := mungleOffer(req.Body())
 	logger.Info("Mungled offer ", mungledOffer)
-	answer := connectFromOffer(mungledOffer)
+	answer := answerToOffer(mungledOffer)
 
 	answer = mungleAnswer(answer)
 	logger.Info("Mungled answer ", answer)
@@ -106,6 +106,18 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	}
 }
 
+func answerToOffer(offerSDP string) string {
+
+	vmr := &VoiceMenuResources{}
+	vmr.init()
+	var vmi = NewVoiceMenuInstance(vmr, 10)
+	answer := vmi.connect(offerSDP, true, true)
+
+	go vmi.StartPlayback()
+
+	return answer
+}
+
 func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
@@ -115,12 +127,7 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 	offerSDP := string(body)
 	fmt.Printf("got request %s\n", offerSDP)
 
-	vmr := &VoiceMenuResources{}
-	vmr.init()
-	var vmi = NewVoiceMenuInstance(vmr, 10)
-	answer := vmi.connect(offerSDP, true, true)
-
-	go vmi.StartPlayback()
+	answer := answerToOffer(offerSDP)
 
 	_, err = io.WriteString(w, answer)
 	if err != nil {
