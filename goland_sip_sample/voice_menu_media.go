@@ -321,9 +321,10 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) s
 	vmi.prepareEncoder()
 
 	<-gatherComplete
-	logger.Info("Gathering complete. Answer set as local description\n" + answer.SDP)
+	answerSDP := answerSD.Marshal()
+	logger.Info("Gathering complete. Answer set as local description\n" + answerSDP)
 
-	return answerSD.Marshal()
+	return answerSDP
 }
 
 func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage ) {

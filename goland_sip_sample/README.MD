@@ -19,3 +19,8 @@ sine=frequency=659.25[c];
 #convert audio
 ffmpeg -i greeting.opus -c:a libopus -page_duration 20000 -vn greeting.ogg
 ```
+
+Needed libraries:
+```bash
+sudo apt update && sudo apt install -y libavdevice-dev libswscale-dev
+```

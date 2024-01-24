@@ -30,8 +30,6 @@ import (
 // #cgo pkg-config: libavdevice libavformat libavfilter libavcodec libswscale libavutil
 import "C"
 
-//sudo apt install libavdevice-dev
-
 import (
 	"errors"
 )
