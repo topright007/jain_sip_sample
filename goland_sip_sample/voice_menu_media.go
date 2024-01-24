@@ -25,7 +25,7 @@ import (
 const (
 	greetingAudioFileName   = "./resources/greeting.ogg"
 	dtmfAudioFileName   	= "./resources/dtmf.ogg"
-	fontFile			   	= "/usr/share/fonts/truetype/JetBrainsMono/JetBrainsMono-Regular.ttf"
+	fontFile			   	= "./resources/JetBrainsMono-Regular.ttf"
 	audioOggPageDuration = time.Millisecond * 20
 )
 
