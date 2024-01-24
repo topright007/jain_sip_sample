@@ -35,7 +35,7 @@ import (
 )
 
 func addLabel(img *image.RGBA, x, y int, label string) {
-	col := RGBA_COLOR_YANDEX_ORANGE
+	col := RGBA_COLOR_ORANGE
 	point := fixed.Point26_6{fixed.I(x), fixed.I(y)}
 
 	d := &font.Drawer{

@@ -22,7 +22,7 @@ var (
 	RGBA_COLOR_WHITE = color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}
 	RGBA_COLOR_GRAD_LIGHT = color.RGBA{0xE8, 0xE6, 0xE2, 0xFF}
 	RGBA_COLOR_GRAD_BLUE = color.RGBA{0xDC, 0xE5, 0xF7, 0xFF}
-	RGBA_COLOR_YANDEX_ORANGE = color.RGBA{0xff, 0x64, 0x27, 0xFF}
+	RGBA_COLOR_ORANGE    = color.RGBA{0xff, 0x64, 0x27, 0xFF}
 )
 
 type VoiceMenuInstance struct {
@@ -246,7 +246,7 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 			xShift := 2*i % (inputImage.Bounds().Dx() - 200) + 100
 
 			draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
-			draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_YANDEX_ORANGE}, image.Point{}, draw.Src)
+			draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
 			addLabel(inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!")
 
 			err, outSize = vmi._encoder.WriteFrame(avPacket)
