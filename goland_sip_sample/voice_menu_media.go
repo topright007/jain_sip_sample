@@ -81,6 +81,7 @@ type VoiceMenuInstance struct {
 	_iceConnectedCtxCancel 	context.CancelFunc
 	_videoTrack				*webrtc.TrackLocalStaticSample
 	_videoTrackSender		*webrtc.RTPSender
+	_videoTrackFPS			int
 	_audioTrack				*webrtc.TrackLocalStaticSample
 	_audioTrackSender		*webrtc.RTPSender
 	_encoder				*Encoder
@@ -135,7 +136,7 @@ func preparePeerConnection(api *webrtc.API, iceConnectedCtxCancel context.Cancel
 		fmt.Printf("Connection State has changed %s \n", connectionState.String())
 		if connectionState == webrtc.ICEConnectionStateConnected {
 			//sleep for 1 sec to wait for the connection to be established
-			time.Sleep(time.Second * time.Duration(2))
+			//time.Sleep(time.Second * time.Duration(2))
 			iceConnectedCtxCancel()
 		}
 	})
@@ -177,7 +178,7 @@ func preparePeerConnection(api *webrtc.API, iceConnectedCtxCancel context.Cancel
 }
 
 func (vmi *VoiceMenuInstance) prepareEncoder () {
-	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)))
+	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)), vmi._videoTrackFPS)
 	if err != nil {panic(err)}
 	vmi._encoder = e
 }
@@ -216,7 +217,7 @@ func initMediaTrack(
 func initVideoTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender){
 	return initMediaTrack(
 		peerConnection,
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 30},
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 60},
 		"video",
 		"pion",
 		)
@@ -231,13 +232,18 @@ func initAudioTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalSt
 	)
 }
 
-func (vmi *VoiceMenuInstance) connect(offerStr string, vmr *VoiceMenuResources) string {
+func NewVoiceMenuInstance(vmr *VoiceMenuResources, videoFPS int ) *VoiceMenuInstance {
+	var vmi = &VoiceMenuInstance{}
+	vmi._vmr = vmr
+	vmi._videoTrackFPS = videoFPS
+	return vmi
+}
+
+func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) string {
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 	vmi._iceConnectedCtx = iceConnectedCtx
 	vmi._iceConnectedCtxCancel = iceConnectedCtxCancel
 	candidatesChannel := make(chan string)
-
-	vmi._vmr = vmr
 
 	settingEngine := prepareSettingsEngine()
 	mediaEngine := prepareMediaEngine()
@@ -250,8 +256,12 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, vmr *VoiceMenuResources) 
 	)
 
 	vmi._peerConnection = preparePeerConnection(apiWithSettings, iceConnectedCtxCancel, candidatesChannel)
-	vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
-	vmi._audioTrack, vmi._audioTrackSender = initAudioTrack(vmi._peerConnection)
+	if video {
+		vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
+	}
+	if audio {
+		vmi._audioTrack, vmi._audioTrackSender = initAudioTrack(vmi._peerConnection)
+	}
 
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -303,19 +313,18 @@ func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage ) {
 	var lastGranule uint64
 	totalPages := len(track)
 
+	logger.Info("Start track playback. Num samples: ", len(track))
+
 	for frameIdx := 0 ; frameIdx < totalPages; frameIdx++ {
 		<-ticker.C
 
 		page := track[frameIdx]
 
-		if page.pageHeader == nil {
-			panic("nonoo!")
-		}
-
 		// The amount of samples is the difference between the last and current timestamp
 		sampleCount := float64(page.pageHeader.GranulePosition - lastGranule)
 		lastGranule = page.pageHeader.GranulePosition
-		sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
+		sampleDuration := time.Duration(sampleCount/48) * time.Millisecond
+		logger.Info("Sample duration ", sampleDuration, " Granule Position: ", page.pageHeader.GranulePosition)
 
 		if err := vmi._audioTrack.WriteSample(media.Sample{Data: page.pageData, Duration: sampleDuration}); err != nil {
 			panic(err)
@@ -338,18 +347,28 @@ func (vmi *VoiceMenuInstance) StartAudioPlayback() {
 	//time.Sleep(time.Duration(10) * time.Second)
 
 	playbackTrack(vmi, vmi._vmr.greetingAudioPages)
+	//playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
 	for ;true; {
-		time.Sleep(time.Second)
+		time.Sleep(time.Second*5)
 		playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
 	}
 
+}
+
+func (vmi *VoiceMenuInstance) StartPlayback() {
+	if vmi._audioTrack != nil {
+		go vmi.StartAudioPlayback()
+	}
+	if vmi._videoTrack != nil {
+		go vmi.StartVideoPlayback()
+	}
 }
 
 func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 	<-vmi._iceConnectedCtx.Done()
 
 	numerator := 1
-	denominator := 10
+	denominator := vmi._videoTrackFPS
 	videoDurationBetweenFrames := (float32(numerator)/float32(denominator))*1000
 	logger.Info("Peer connection established. sending video. Between frames: ",
 		videoDurationBetweenFrames,
@@ -361,10 +380,6 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 
 	ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
 	for i:= 0; true; i++  {
-		<-ticker.C
-		outSize := -1
-		var err error
-
 		inputImage := vmi._encoder.inputImage
 
 		xShift := 2*i % (inputImage.Bounds().Dx() - 200) + 100
@@ -372,17 +387,29 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 		draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
 		draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
 		addLabel(inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!")
+		addLabel(inputImage, 200, 200, fmt.Sprintf("Frame number %d", i))
 
 		//sometimes ffmpeg skips frames
-		for outSize < 0 {
-			vmi._encoder.initPacket(avPacket, i)
 
-			err, outSize = vmi._encoder.WriteFrame(avPacket)
-			if err != nil {panic(err)}
+		vmi._encoder.initPacket(avPacket, i)
+
+		err, outSize := vmi._encoder.WriteFrame(avPacket)
+		if err != nil {panic(err)}
+		//keep feeding frames to ffmpeg, but don't display blanks
+		if outSize < 0 {
+			continue
 		}
-		packetSlice := avPacketToSlice(avPacket)
 
-		if ivfErr := vmi._videoTrack.WriteSample(media.Sample{Data: packetSlice, Duration: time.Second}); ivfErr != nil {
+		<-ticker.C
+
+		packetSlice := avPacketToSlice(avPacket)
+		mediaSample := media.Sample{
+			Data: packetSlice,
+			Duration: time.Duration(float64(time.Millisecond) * float64(videoDurationBetweenFrames)),
+			//Timestamp: time.Now(),
+			PacketTimestamp: uint32(i),
+		}
+		if ivfErr := vmi._videoTrack.WriteSample(mediaSample) ; ivfErr != nil {
 			panic(ivfErr)
 		}
 	}

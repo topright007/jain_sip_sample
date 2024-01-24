@@ -29,20 +29,21 @@
 
             }
         };
-        // peerConnection.onaddstream = function(event) {
-        //     console.log("adding stream from event " + JSON.stringify(event))
-        //     document.getElementById("videoElement").srcObject = event.stream;
-        // };
-
-        peerConnection.ontrack = function(event) {
+        peerConnection.onaddstream = function(event) {
             console.log("adding stream from event " + JSON.stringify(event))
-            if(event.track && event.track.kind && event.track.kind === "video") {
-                var videoElement = document.getElementById("videoElement");
-                videoElement.srcObject = event.streams[0];
-                videoElement.play()
-            }
+            document.getElementById("videoElement").srcObject = event.stream;
+            videoElement.srcObject = event.stream;
+            videoElement.play()
         };
 
+        // peerConnection.ontrack = function(event) {
+        //     console.log("adding stream from event " + JSON.stringify(event))
+        //     if(event.track && event.track.kind && event.track.kind === "video") {
+        //         var videoElement = document.getElementById("videoElement");
+        //         videoElement.srcObject = event.streams[0];
+        //         videoElement.play()
+        //     }
+        // };
 
         console.log("peer connection initialized")
 

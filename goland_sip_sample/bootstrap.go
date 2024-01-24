@@ -52,7 +52,7 @@ func main1() {
 	f := C.fopen(C.CString("result.mpeg"), C.CString("w"))
 	defer C.fclose(f)
 
-	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)))
+	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)), 30)
 	defer e.Close()
 
 	if err != nil {

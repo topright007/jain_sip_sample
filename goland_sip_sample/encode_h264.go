@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"log"
 	"reflect"
+	"time"
 	"unsafe"
 )
 
@@ -14,6 +15,7 @@ import (
 //#include <libavcodec/avcodec.h>
 // #include <libswscale/swscale.h>
 // #include <libavutil/imgutils.h>
+// #include <libavutil/opt.h>
 // #include "video_utils.h"
 //
 // // ... yes. Don't ask.
@@ -22,6 +24,8 @@ import (
 // #ifndef PIX_FMT_RGB0
 // #define PIX_FMT_RGB0 PIX_FMT_RGB32
 // #endif
+//
+//int FFMPEG_WAIT_FOR_INPUT_AVERROR = AVERROR(EAGAIN);
 //
 // #cgo pkg-config: libavdevice libavformat libavfilter libavcodec libswscale libavutil
 import "C"
@@ -80,11 +84,13 @@ func drawBox(pic *C.AVPicture, x int, y int, width int, height int, color C.YUVC
 	C.draw_box(pic, C.uint32_t(x), C.uint32_t(y), C.uint32_t(width), C.uint32_t(height), color)
 }
 
-func (e *Encoder) initPacket(packet H264Packet, streamIndex int) {
+func (e *Encoder) initPacket(packet H264Packet, frameNum int) {
 	avPacket := (*C.AVPacket)(packet)
 	C.av_init_packet(avPacket)
 	avPacket.data = e._outbuf
 	avPacket.size = e._outbuflen
+	avPacket.pts = C.long(frameNum)
+	avPacket.duration = 1
 }
 
 func initH264Encoder() {
@@ -131,7 +137,7 @@ func (p *YCbCrWithSet) Set(x int, y int, c color.Color) {
 	p.Cr[p.COffset(x,y)] = c1.Cr
 }
 
-func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
+func NewEncoder(codec uint32, inputImage *image.RGBA, fps int) (*Encoder, error) {
 	_codec := C.avcodec_find_encoder(codec)
 	if _codec == nil {
 		return nil, fmt.Errorf("could not find codec")
@@ -140,24 +146,25 @@ func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
 	width := inputImage.Bounds().Dx()
 	height := inputImage.Bounds().Dy()
 
-	avContext := C.avcodec_alloc_context3(_codec)
-	avContext.bit_rate = 400000
-
 	// resolution must be a multiple of two
 	if width%2 == 1 || height%2 == 1 {
 		return nil, fmt.Errorf("Bad image dimensions (%d, %d), must be even", width, height)
 	}
-
 	log.Printf("Encoder dimensions: %d, %d", width, height)
 
+	avContext := C.avcodec_alloc_context3(_codec)
 	avContext.width = C.int(width)
 	avContext.height = C.int(height)
-	avContext.time_base = C.AVRational{1, 30} // FPS
+	avContext.time_base = C.AVRational{1, C.int(fps)} // FPS
 	avContext.gop_size = 100                   // emit one intra frame every ten frames
 	avContext.max_b_frames = 0
+	avContext.delay = 0
 
 	avContext.pix_fmt = C.AV_PIX_FMT_YUV420P
-	avContext.bit_rate = C.long(400000)
+	avContext.bit_rate = C.long(10485760)		//10 MBit
+
+	C.av_opt_set(avContext.priv_data, C.CString("preset"), C.CString("ultrafast"), 0);
+	C.av_opt_set(avContext.priv_data, C.CString("tune"), C.CString("zerolatency"), 0);
 
 	avFrame := C.av_frame_alloc()
 	if avFrame == nil {
@@ -167,7 +174,6 @@ func NewEncoder(codec uint32, inputImage *image.RGBA) (*Encoder, error) {
 	avFrame.format = C.AV_PIX_FMT_YUV420P
 	avFrame.width = avContext.width
 	avFrame.height = avContext.height
-
 
 	//from AV
 	avFrameData := [8]*C.uint8_t{}
@@ -216,6 +222,7 @@ func (e *Encoder) WriteFrame(avPacket H264Packet) (error, int) {
 }
 
 func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
+	start := time.Now()
 
 	gotPacketStr := C.int(0)
 
@@ -223,25 +230,37 @@ func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
 		0, e._context.height,
 		&e._frame.data[0], &e._frame.linesize[0])
 
-	var successInt C.int = C.avcodec_encode_video2(
+	var successInt C.int = C.avcodec_send_frame(
 		e._context,
-		packet,
 		e._frame,
-		&gotPacketStr,
 	)
 
 	if int(successInt) != 0 {
 		return errors.New(fmt.Sprintf(
-				"failed to call avcodec_encode_video: %d. result length: %d",
+				"failed to call avcodec_send_frame: %d. result length: %d",
 				successInt,
 				gotPacketStr,
 			)),
 			0
 	}
 
-	if gotPacketStr == 0 {
+	successInt = C.avcodec_receive_packet(
+		e._context,
+		packet,
+	)
+
+	if successInt == C.FFMPEG_WAIT_FOR_INPUT_AVERROR {
 		logger.Info("Frame not encoded by libavicodec")
 		return nil, -1
+	}
+
+	if int(successInt) != 0 {
+		return errors.New(fmt.Sprintf(
+				"failed to call avcodec_receive_packet: %d. result length: %d",
+				successInt,
+				gotPacketStr,
+			)),
+			0
 	}
 
 	logger.Info("successfully encoded frame."+
@@ -249,6 +268,7 @@ func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
 		"\nstream index: ", packet.stream_index,
 		"\npacket duration: ", packet.duration,
 		"\nresult len: ", packet.size,
+		"\nencoding took: ", time.Since(start),
 	)
 
 	return nil, int(packet.size)

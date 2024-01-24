@@ -117,11 +117,10 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 
 	vmr := &VoiceMenuResources{}
 	vmr.init()
-	var vmi = VoiceMenuInstance{}
-	answer := vmi.connect(offerSDP, vmr)
+	var vmi = NewVoiceMenuInstance(vmr, 10)
+	answer := vmi.connect(offerSDP, true, true)
 
-	go vmi.StartVideoPlayback()
-	go vmi.StartAudioPlayback()
+	go vmi.StartPlayback()
 
 	_, err = io.WriteString(w, answer)
 	if err != nil {
