@@ -3,17 +3,26 @@ package main
 import "C"
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
 	"github.com/pion/sdp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 	"image"
 	"image/color"
 	"image/draw"
+	"io"
 	"os"
 	"time"
+)
+
+const (
+	greetingAudioFileName   = "./resources/greeting.ogg"
+	dtmfAudioFileName   	= "./resources/dtmf.ogg"
+	audioOggPageDuration = time.Millisecond * 20
 )
 
 var (
@@ -25,13 +34,57 @@ var (
 	RGBA_COLOR_ORANGE    = color.RGBA{0xff, 0x64, 0x27, 0xFF}
 )
 
+type OggAudioPage struct {
+	pageData 	[]byte
+	pageHeader	*oggreader.OggPageHeader
+}
+
+type VoiceMenuResources struct {
+	greetingAudioPages	[]OggAudioPage
+	dtmfAudioPages		[]OggAudioPage
+}
+
+func readOggFile(path string) []OggAudioPage {
+	var result []OggAudioPage
+	file, oggErr := os.Open(path)
+	if oggErr != nil {
+		panic(oggErr)
+	}
+
+	// Open on oggfile in non-checksum mode.
+	ogg, _, oggErr := oggreader.NewWith(file)
+	if oggErr != nil {
+		panic(oggErr)
+	}
+
+	for ; true; {
+		pageData, pageHeader, oggErr := ogg.ParseNextPage()
+		if errors.Is(oggErr, io.EOF) {
+			break
+			//os.Exit(0)
+		}
+
+		result = append(result, OggAudioPage{pageData, pageHeader})
+	}
+	return result
+}
+
+func (vrm *VoiceMenuResources) init() {
+	vrm.dtmfAudioPages 		= readOggFile(dtmfAudioFileName)
+	vrm.greetingAudioPages	= readOggFile(greetingAudioFileName)
+}
+
+
 type VoiceMenuInstance struct {
 	_peerConnection 		*webrtc.PeerConnection
 	_iceConnectedCtx		context.Context
 	_iceConnectedCtxCancel 	context.CancelFunc
 	_videoTrack				*webrtc.TrackLocalStaticSample
 	_videoTrackSender		*webrtc.RTPSender
+	_audioTrack				*webrtc.TrackLocalStaticSample
+	_audioTrackSender		*webrtc.RTPSender
 	_encoder				*Encoder
+	_vmr					*VoiceMenuResources
 }
 
 func prepareSettingsEngine() webrtc.SettingEngine {
@@ -129,11 +182,62 @@ func (vmi *VoiceMenuInstance) prepareEncoder () {
 	vmi._encoder = e
 }
 
-func (vmi *VoiceMenuInstance) connect(offerStr string) string {
+func initMediaTrack(
+	peerConnection *webrtc.PeerConnection,
+	codecCapability webrtc.RTPCodecCapability,
+	id string,
+	streamId string )(*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
+	track, trackErr := webrtc.NewTrackLocalStaticSample(
+		codecCapability,
+		id,
+		streamId,
+	)
+	if trackErr != nil {
+		panic(trackErr)
+	}
+
+	rtpSender, trackErr := peerConnection.AddTrack(track)
+	if trackErr != nil {
+		panic(trackErr)
+	}
+
+	go func() {
+		rtcpBuf := make([]byte, 1500)
+		for {
+			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
+				return
+			}
+		}
+	}()
+
+	return track, rtpSender
+}
+
+func initVideoTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender){
+	return initMediaTrack(
+		peerConnection,
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 30},
+		"video",
+		"pion",
+		)
+}
+
+func initAudioTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender){
+	return initMediaTrack(
+		peerConnection,
+		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
+		"audio",
+		"pion",
+	)
+}
+
+func (vmi *VoiceMenuInstance) connect(offerStr string, vmr *VoiceMenuResources) string {
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 	vmi._iceConnectedCtx = iceConnectedCtx
 	vmi._iceConnectedCtxCancel = iceConnectedCtxCancel
 	candidatesChannel := make(chan string)
+
+	vmi._vmr = vmr
 
 	settingEngine := prepareSettingsEngine()
 	mediaEngine := prepareMediaEngine()
@@ -146,32 +250,8 @@ func (vmi *VoiceMenuInstance) connect(offerStr string) string {
 	)
 
 	vmi._peerConnection = preparePeerConnection(apiWithSettings, iceConnectedCtxCancel, candidatesChannel)
-
-	videoTrack, videoTrackErr := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 30},
-		"video",
-		"pion",
-		)
-	if videoTrackErr != nil {
-		panic(videoTrackErr)
-	}
-
-	rtpSender, videoTrackErr := vmi._peerConnection.AddTrack(videoTrack)
-	if videoTrackErr != nil {
-		panic(videoTrackErr)
-	}
-
-	vmi._videoTrack = videoTrack
-	vmi._videoTrackSender = rtpSender
-
-	go func() {
-		rtcpBuf := make([]byte, 1500)
-		for {
-			if _, _, rtcpErr := rtpSender.Read(rtcpBuf); rtcpErr != nil {
-				return
-			}
-		}
-	}()
+	vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
+	vmi._audioTrack, vmi._audioTrackSender = initAudioTrack(vmi._peerConnection)
 
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -218,6 +298,53 @@ func (vmi *VoiceMenuInstance) connect(offerStr string) string {
 	return answerSD.Marshal()
 }
 
+func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage ) {
+	ticker := time.NewTicker(oggPageDuration)
+	var lastGranule uint64
+	totalPages := len(track)
+
+	for frameIdx := 0 ; frameIdx < totalPages; frameIdx++ {
+		<-ticker.C
+
+		page := track[frameIdx]
+
+		if page.pageHeader == nil {
+			panic("nonoo!")
+		}
+
+		// The amount of samples is the difference between the last and current timestamp
+		sampleCount := float64(page.pageHeader.GranulePosition - lastGranule)
+		lastGranule = page.pageHeader.GranulePosition
+		sampleDuration := time.Duration((sampleCount/48000)*1000) * time.Millisecond
+
+		if err := vmi._audioTrack.WriteSample(media.Sample{Data: page.pageData, Duration: sampleDuration}); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (vmi *VoiceMenuInstance) StartAudioPlayback() {
+	<-vmi._iceConnectedCtx.Done()
+
+	time.Sleep(time.Second)
+
+	// Keep track of last granule, the difference is the amount of samples in the buffer
+
+
+	// It is important to use a time.Ticker instead of time.Sleep because
+	// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
+	// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
+
+	//time.Sleep(time.Duration(10) * time.Second)
+
+	playbackTrack(vmi, vmi._vmr.greetingAudioPages)
+	for ;true; {
+		time.Sleep(time.Second)
+		playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
+	}
+
+}
+
 func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 	<-vmi._iceConnectedCtx.Done()
 
@@ -237,17 +364,18 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 		<-ticker.C
 		outSize := -1
 		var err error
+
+		inputImage := vmi._encoder.inputImage
+
+		xShift := 2*i % (inputImage.Bounds().Dx() - 200) + 100
+
+		draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
+		draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
+		addLabel(inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!")
+
 		//sometimes ffmpeg skips frames
 		for outSize < 0 {
 			vmi._encoder.initPacket(avPacket, i)
-
-			inputImage := vmi._encoder.inputImage
-
-			xShift := 2*i % (inputImage.Bounds().Dx() - 200) + 100
-
-			draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
-			draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
-			addLabel(inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!")
 
 			err, outSize = vmi._encoder.WriteFrame(avPacket)
 			if err != nil {panic(err)}

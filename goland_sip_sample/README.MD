@@ -15,4 +15,7 @@ sine=frequency=659.25[c];
 ' -c:a libopus -page_duration 20000 -vn testsrc.ogg
 #generate video
  ffmpeg -f lavfi -i testsrc=duration=60:size=1280x720:rate=30 -c:v libvpx testsrc.ivf
+ 
+#convert audio
+ffmpeg -i greeting.opus -c:a libopus -page_duration 20000 -vn greeting.ogg
 ```

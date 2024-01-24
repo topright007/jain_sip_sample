@@ -115,11 +115,13 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 	offerSDP := string(body)
 	fmt.Printf("got request %s\n", offerSDP)
 
-	//answer := connectFromOffer(offerSDP)
+	vmr := &VoiceMenuResources{}
+	vmr.init()
 	var vmi = VoiceMenuInstance{}
-	answer := vmi.connect(offerSDP)
+	answer := vmi.connect(offerSDP, vmr)
 
 	go vmi.StartVideoPlayback()
+	go vmi.StartAudioPlayback()
 
 	_, err = io.WriteString(w, answer)
 	if err != nil {
