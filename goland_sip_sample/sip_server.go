@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"github.com/ghettovoice/gosip/log"
 	"github.com/ghettovoice/gosip/sip"
 	"github.com/pion/sdp"
+	"github.com/pion/webrtc/v4"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -43,7 +45,7 @@ func mungleOffer(offer string) string {
 			midValueCounter += 1
 			media.Attributes = append(media.Attributes, sdp.Attribute{Key: "mid", Value: strconv.Itoa(midValueCounter)})
 		}
-		media.Attributes = append(media.Attributes, sdp.Attribute{Key: "sendrecv"} )
+		media.Attributes = append(media.Attributes, sdp.Attribute{Key: "sendrecv"})
 	}
 
 	//some dummy fingerprint. validation will be disabled
@@ -92,7 +94,8 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	//}
 	mungledOffer := mungleOffer(req.Body())
 	logger.Info("Mungled offer ", mungledOffer)
-	answer := answerToOffer(mungledOffer)
+	//in SIP candidates are supposed to be embedded into sdp
+	answer := answerToOffer(mungledOffer, []webrtc.ICECandidateInit{})
 
 	answer = mungleAnswer(answer)
 	logger.Info("Mungled answer ", answer)
@@ -106,16 +109,21 @@ func onInvite(req sip.Request, tx sip.ServerTransaction) {
 	}
 }
 
-func answerToOffer(offerSDP string) string {
+func answerToOffer(offerSDP string, candidates []webrtc.ICECandidateInit) string {
 
 	vmr := &VoiceMenuResources{}
 	vmr.init()
 	var vmi = NewVoiceMenuInstance(vmr, 10)
-	answer := vmi.connect(offerSDP, true, true)
+	answer := vmi.connect(offerSDP, candidates, true, true)
 
 	go vmi.StartPlayback()
 
 	return answer
+}
+
+type WebOffer struct {
+	Offer      string
+	Candidates []webrtc.ICECandidateInit
 }
 
 func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
@@ -124,10 +132,15 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 		fmt.Printf("could not read body: %s\n", err)
 		panic(err)
 	}
-	offerSDP := string(body)
-	fmt.Printf("got request %s\n", offerSDP)
 
-	answer := answerToOffer(offerSDP)
+	var webOffer WebOffer
+	if err = json.Unmarshal(body, &webOffer); err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("got request %s with candidates %s\n", webOffer.Offer, webOffer.Candidates)
+
+	answer := answerToOffer(webOffer.Offer, webOffer.Candidates)
 
 	_, err = io.WriteString(w, answer)
 	if err != nil {
@@ -135,12 +148,31 @@ func getHttpAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func getStunServers(w http.ResponseWriter, r *http.Request) {
+	vmr := &VoiceMenuResources{}
+	vmr.init()
+
+	candidates := vmr.getStunServers()
+	response, err := json.Marshal(candidates)
+	if err != nil {
+		panic(err)
+	}
+
+	if _, err := w.Write(response); err != nil {
+		panic(err)
+	}
+
+}
+
 func setupHttpServer() {
 	initH264Encoder()
 
 	http.HandleFunc("/offer", getHttpAnswer)
+	http.HandleFunc("/stunServers", getStunServers)
 	fs := http.FileServer(http.Dir("./httpStatic"))
 	http.Handle("/", fs)
 
-	if err := http.ListenAndServe(":8885", nil); err != nil {panic(err)}
+	if err := http.ListenAndServe(":8885", nil); err != nil {
+		panic(err)
+	}
 }

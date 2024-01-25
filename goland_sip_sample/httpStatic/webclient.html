@@ -5,36 +5,52 @@
     <title>Sample webrtc client for chrome</title>
 
     <script>
-        SIP_SAMPLE_HOST = "http://localhost:8885"
+        SIP_SAMPLE_HOST = "/"
 
-        configuration = null;
-        var peerConnection = new RTCPeerConnection(configuration);
-        var candidates = []
+        var gatheredCandidates = []
 
         var candidatesGatheredHook
         var candidatesGatheredPromise = new Promise(function (resolve, reject) {
             candidatesGatheredHook = resolve
         })
 
-        peerConnection.onicecandidate = function(event) {
-            if(event.candidate === null) {
-                console.log("finished gathering candidates")
-                candidatesGatheredHook()
-                return
-            }
-            if (event.candidate) {
-                console.log("adding candidate from event " + JSON.stringify(event.candidate))
+        async function newPeerConnection() {
+            var stunServersResponse = await fetch("/stunServers", {
+                method: "GET",
+            });
+            var stunServersStr = await stunServersResponse.text();
+            var stunServers = JSON.parse(stunServersStr)
 
-                candidates.push(event.candidate)
-
+            var configuration = null;
+            if(stunServers && stunServers.length > 0) {
+                console.log("Using stun server " + stunServers[0])
+                configuration = {'iceServers': [{'urls': stunServers[0]}]}
             }
-        };
-        peerConnection.onaddstream = function(event) {
-            console.log("adding stream from event " + JSON.stringify(event))
-            document.getElementById("videoElement").srcObject = event.stream;
-            videoElement.srcObject = event.stream;
-            videoElement.play()
-        };
+
+            var peerConnection = new RTCPeerConnection(configuration);
+
+            peerConnection.onicecandidate = function(event) {
+                if(event.candidate === null) {
+                    console.log("finished gathering candidates")
+                    candidatesGatheredHook()
+                    return
+                }
+                if (event.candidate) {
+                    console.log("adding candidate from event " + JSON.stringify(event.candidate))
+
+                    gatheredCandidates.push(event.candidate)
+
+                }
+            };
+            peerConnection.onaddstream = function(event) {
+                console.log("adding stream from event " + JSON.stringify(event))
+                document.getElementById("videoElement").srcObject = event.stream;
+                videoElement.srcObject = event.stream;
+                videoElement.play()
+            };
+
+            return peerConnection
+        }
 
         // peerConnection.ontrack = function(event) {
         //     console.log("adding stream from event " + JSON.stringify(event))
@@ -47,13 +63,17 @@
 
         console.log("peer connection initialized")
 
-        async function sendOffer(offerSDP) {
+        async function sendOffer(offerSDP, candidates) {
+            body = {
+                "offer": offerSDP,
+                "candidates": candidates
+            }
             var response = await fetch("/offer", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json"
                 },
-                body: offerSDP
+                body: JSON.stringify(body)
             });
 
             return response.text()
@@ -61,6 +81,7 @@
 
 
         async function setUpConnection() {
+            var peerConnection = await newPeerConnection()
             var offer = await peerConnection.createOffer({
                 iceRestart: false,
                 offerToReceiveVideo: true,
@@ -73,7 +94,7 @@
 
             await candidatesGatheredPromise
 
-            var answerSDP = await sendOffer(offer.sdp)
+            var answerSDP = await sendOffer(offer.sdp, gatheredCandidates)
             console.log("answer received: " + answerSDP)
 
             await peerConnection.setRemoteDescription({

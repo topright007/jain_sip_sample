@@ -5,13 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/golang/freetype/truetype"
 	"github.com/pion/interceptor"
 	"github.com/pion/logging"
 	"github.com/pion/sdp"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
-	"github.com/golang/freetype/truetype"
 	"image"
 	"image/color"
 	"image/draw"
@@ -23,30 +23,31 @@ import (
 )
 
 const (
-	greetingAudioFileName   = "./resources/greeting.ogg"
-	dtmfAudioFileName   	= "./resources/dtmf.ogg"
-	fontFile			   	= "./resources/JetBrainsMono-Regular.ttf"
-	audioOggPageDuration = time.Millisecond * 20
+	greetingAudioFileName = "./resources/greeting.ogg"
+	dtmfAudioFileName     = "./resources/dtmf.ogg"
+	fontFile              = "./resources/JetBrainsMono-Regular.ttf"
+	audioOggPageDuration  = time.Millisecond * 20
 )
 
 var (
-	RGBA_COLOR_RED = color.RGBA{200, 0, 0, 0xFF}
-	RGBA_COLOR_BLACK = color.RGBA{0, 0, 0, 0xFF}
-	RGBA_COLOR_WHITE = color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}
+	RGBA_COLOR_RED        = color.RGBA{200, 0, 0, 0xFF}
+	RGBA_COLOR_BLACK      = color.RGBA{0, 0, 0, 0xFF}
+	RGBA_COLOR_WHITE      = color.RGBA{0xFF, 0xFF, 0xFF, 0xFF}
 	RGBA_COLOR_GRAD_LIGHT = color.RGBA{0xE8, 0xE6, 0xE2, 0xFF}
-	RGBA_COLOR_GRAD_BLUE = color.RGBA{0xDC, 0xE5, 0xF7, 0xFF}
-	RGBA_COLOR_ORANGE    = color.RGBA{0xff, 0x64, 0x27, 0xFF}
+	RGBA_COLOR_GRAD_BLUE  = color.RGBA{0xDC, 0xE5, 0xF7, 0xFF}
+	RGBA_COLOR_ORANGE     = color.RGBA{0xff, 0x64, 0x27, 0xFF}
 )
 
 type OggAudioPage struct {
-	pageData 	[]byte
-	pageHeader	*oggreader.OggPageHeader
+	pageData   []byte
+	pageHeader *oggreader.OggPageHeader
 }
 
 type VoiceMenuResources struct {
-	greetingAudioPages	[]OggAudioPage
-	dtmfAudioPages		[]OggAudioPage
-	defaultFont			*truetype.Font
+	greetingAudioPages []OggAudioPage
+	dtmfAudioPages     []OggAudioPage
+	defaultFont        *truetype.Font
+	stunServerAddress  string
 }
 
 func readOggFile(path string) []OggAudioPage {
@@ -62,7 +63,7 @@ func readOggFile(path string) []OggAudioPage {
 		panic(oggErr)
 	}
 
-	for ; true; {
+	for true {
 		pageData, pageHeader, oggErr := ogg.ParseNextPage()
 		if errors.Is(oggErr, io.EOF) {
 			break
@@ -74,9 +75,17 @@ func readOggFile(path string) []OggAudioPage {
 	return result
 }
 
-func (vrm *VoiceMenuResources) init() {
-	vrm.dtmfAudioPages 		= readOggFile(dtmfAudioFileName)
-	vrm.greetingAudioPages	= readOggFile(greetingAudioFileName)
+func (vmr *VoiceMenuResources) getStunServers() []string {
+	var stunServers []string
+	if len(vmr.stunServerAddress) > 0 {
+		stunServers = append(stunServers, vmr.stunServerAddress)
+	}
+	return stunServers
+}
+
+func (vmr *VoiceMenuResources) init() {
+	vmr.dtmfAudioPages = readOggFile(dtmfAudioFileName)
+	vmr.greetingAudioPages = readOggFile(greetingAudioFileName)
 
 	fontBytes, err := ioutil.ReadFile(fontFile)
 	if err != nil {
@@ -89,21 +98,22 @@ func (vrm *VoiceMenuResources) init() {
 		return
 	}
 
-	vrm.defaultFont = f
+	vmr.defaultFont = f
+
+	vmr.stunServerAddress = os.Getenv("SAMPLE_STUN_SERVER")
 }
 
-
 type VoiceMenuInstance struct {
-	_peerConnection 		*webrtc.PeerConnection
-	_iceConnectedCtx		context.Context
-	_iceConnectedCtxCancel 	context.CancelFunc
-	_videoTrack				*webrtc.TrackLocalStaticSample
-	_videoTrackSender		*webrtc.RTPSender
-	_videoTrackFPS			int
-	_audioTrack				*webrtc.TrackLocalStaticSample
-	_audioTrackSender		*webrtc.RTPSender
-	_encoder				*Encoder
-	_vmr					*VoiceMenuResources
+	_peerConnection        *webrtc.PeerConnection
+	_iceConnectedCtx       context.Context
+	_iceConnectedCtxCancel context.CancelFunc
+	_videoTrack            *webrtc.TrackLocalStaticSample
+	_videoTrackSender      *webrtc.RTPSender
+	_videoTrackFPS         int
+	_audioTrack            *webrtc.TrackLocalStaticSample
+	_audioTrackSender      *webrtc.RTPSender
+	_encoder               *Encoder
+	_vmr                   *VoiceMenuResources
 }
 
 func prepareSettingsEngine() webrtc.SettingEngine {
@@ -111,7 +121,7 @@ func prepareSettingsEngine() webrtc.SettingEngine {
 	settingEngine.DisableCertificateFingerprintVerification(true)
 
 	settingEngine.LoggerFactory = &logging.DefaultLoggerFactory{
-		Writer:          os.Stdout,
+		Writer: os.Stdout,
 		//DefaultLogLevel: logging.LogLevelTrace,
 		DefaultLogLevel: logging.LogLevelWarn,
 		ScopeLevels: map[string]logging.LogLevel{
@@ -122,25 +132,29 @@ func prepareSettingsEngine() webrtc.SettingEngine {
 	return settingEngine
 }
 
-func prepareMediaEngine() *webrtc.MediaEngine{
-	mediaEngine :=&webrtc.MediaEngine{}
-	if err := mediaEngine.RegisterDefaultCodecs(); err != nil { panic(err) }
+func prepareMediaEngine() *webrtc.MediaEngine {
+	mediaEngine := &webrtc.MediaEngine{}
+	if err := mediaEngine.RegisterDefaultCodecs(); err != nil {
+		panic(err)
+	}
 	return mediaEngine
 }
 
 func prepareWebRTCInterceptors(mediaEngine *webrtc.MediaEngine) *interceptor.Registry {
 	interceptors := &interceptor.Registry{}
-	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptors); err != nil { panic(err) }
+	if err := webrtc.RegisterDefaultInterceptors(mediaEngine, interceptors); err != nil {
+		panic(err)
+	}
 	return interceptors
 }
 
-func preparePeerConnection(api *webrtc.API, iceConnectedCtxCancel context.CancelFunc, candidatesChannel chan string) *webrtc.PeerConnection {
+func preparePeerConnection(vmr *VoiceMenuResources, api *webrtc.API, iceConnectedCtxCancel context.CancelFunc, candidatesChannel chan string) *webrtc.PeerConnection {
+
+	stunServers := vmr.getStunServers()
 	peerConnection, err := api.NewPeerConnection(webrtc.Configuration{
 		ICEServers: []webrtc.ICEServer{
 			{
-				URLs: []string{
-					//"stun:stun.l.google.com:19302"
-				},
+				URLs: stunServers,
 			},
 		},
 	})
@@ -195,9 +209,11 @@ func preparePeerConnection(api *webrtc.API, iceConnectedCtxCancel context.Cancel
 	return peerConnection
 }
 
-func (vmi *VoiceMenuInstance) prepareEncoder () {
-	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0,0,1280,720)), vmi._videoTrackFPS)
-	if err != nil {panic(err)}
+func (vmi *VoiceMenuInstance) prepareEncoder() {
+	e, err := NewEncoder(CODEC_ID_H264, image.NewRGBA(image.Rect(0, 0, 1280, 720)), vmi._videoTrackFPS)
+	if err != nil {
+		panic(err)
+	}
 	vmi._encoder = e
 }
 
@@ -205,7 +221,7 @@ func initMediaTrack(
 	peerConnection *webrtc.PeerConnection,
 	codecCapability webrtc.RTPCodecCapability,
 	id string,
-	streamId string )(*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
+	streamId string) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
 	track, trackErr := webrtc.NewTrackLocalStaticSample(
 		codecCapability,
 		id,
@@ -232,16 +248,16 @@ func initMediaTrack(
 	return track, rtpSender
 }
 
-func initVideoTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender){
+func initVideoTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
 	return initMediaTrack(
 		peerConnection,
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264, ClockRate: 60},
 		"video",
 		"pion",
-		)
+	)
 }
 
-func initAudioTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender){
+func initAudioTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
 	return initMediaTrack(
 		peerConnection,
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
@@ -250,14 +266,14 @@ func initAudioTrack(peerConnection *webrtc.PeerConnection) (*webrtc.TrackLocalSt
 	)
 }
 
-func NewVoiceMenuInstance(vmr *VoiceMenuResources, videoFPS int ) *VoiceMenuInstance {
+func NewVoiceMenuInstance(vmr *VoiceMenuResources, videoFPS int) *VoiceMenuInstance {
 	var vmi = &VoiceMenuInstance{}
 	vmi._vmr = vmr
 	vmi._videoTrackFPS = videoFPS
 	return vmi
 }
 
-func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) string {
+func (vmi *VoiceMenuInstance) connect(offerStr string, candidates []webrtc.ICECandidateInit, audio bool, video bool) string {
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
 	vmi._iceConnectedCtx = iceConnectedCtx
 	vmi._iceConnectedCtxCancel = iceConnectedCtxCancel
@@ -273,7 +289,7 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) s
 		webrtc.WithInterceptorRegistry(interceptors),
 	)
 
-	vmi._peerConnection = preparePeerConnection(apiWithSettings, iceConnectedCtxCancel, candidatesChannel)
+	vmi._peerConnection = preparePeerConnection(vmi._vmr, apiWithSettings, iceConnectedCtxCancel, candidatesChannel)
 	if video {
 		vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
 	}
@@ -305,18 +321,26 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) s
 	}
 
 	answerSD := sdp.SessionDescription{}
-	if err = answerSD.Unmarshal(answer.SDP); err != nil{ panic(err) }
+	if err = answerSD.Unmarshal(answer.SDP); err != nil {
+		panic(err)
+	}
 
-	for cand := range(candidatesChannel) {
+	for cand := range candidatesChannel {
 		if cand == "" {
 			break
 		}
-		for _, md := range(answerSD.MediaDescriptions) {
+		for _, md := range answerSD.MediaDescriptions {
 			md.Attributes = append(md.Attributes, sdp.Attribute{Key: "candidate", Value: cand})
 		}
 	}
 
 	close(candidatesChannel)
+
+	for _, candidate := range candidates {
+		if err = vmi._peerConnection.AddICECandidate(candidate); err != nil {
+			panic(err)
+		}
+	}
 
 	vmi.prepareEncoder()
 
@@ -327,14 +351,14 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, audio bool, video bool) s
 	return answerSDP
 }
 
-func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage ) {
+func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage) {
 	ticker := time.NewTicker(audioOggPageDuration)
 	var lastGranule uint64
 	totalPages := len(track)
 
 	logger.Info("Start track playback. Num samples: ", len(track))
 
-	for frameIdx := 0 ; frameIdx < totalPages; frameIdx++ {
+	for frameIdx := 0; frameIdx < totalPages; frameIdx++ {
 		<-ticker.C
 
 		page := track[frameIdx]
@@ -358,7 +382,6 @@ func (vmi *VoiceMenuInstance) StartAudioPlayback() {
 
 	// Keep track of last granule, the difference is the amount of samples in the buffer
 
-
 	// It is important to use a time.Ticker instead of time.Sleep because
 	// * avoids accumulating skew, just calling time.Sleep didn't compensate for the time spent parsing the data
 	// * works around latency issues with Sleep (see https://github.com/golang/go/issues/44343)
@@ -367,8 +390,8 @@ func (vmi *VoiceMenuInstance) StartAudioPlayback() {
 
 	playbackTrack(vmi, vmi._vmr.greetingAudioPages)
 	//playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
-	for ;true; {
-		time.Sleep(time.Second*5)
+	for true {
+		time.Sleep(time.Second * 5)
 		playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
 	}
 
@@ -388,7 +411,7 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 
 	numerator := 1
 	denominator := vmi._videoTrackFPS
-	videoDurationBetweenFrames := (float32(numerator)/float32(denominator))*1000
+	videoDurationBetweenFrames := (float32(numerator) / float32(denominator)) * 1000
 	logger.Info("Peer connection established. sending video. Between frames: ",
 		videoDurationBetweenFrames,
 		" milliseconds",
@@ -398,10 +421,10 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 	defer freePacket()
 
 	ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
-	for i:= 0; true; i++  {
+	for i := 0; true; i++ {
 		inputImage := vmi._encoder.inputImage
 
-		xShift := 2*i % (inputImage.Bounds().Dx() - 200) + 100
+		xShift := 2*i%(inputImage.Bounds().Dx()-200) + 100
 
 		draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
 		draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
@@ -414,7 +437,9 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 		vmi._encoder.initPacket(avPacket, i)
 
 		err, outSize := vmi._encoder.WriteFrame(avPacket)
-		if err != nil {panic(err)}
+		if err != nil {
+			panic(err)
+		}
 		//keep feeding frames to ffmpeg, but don't display blanks
 		if outSize < 0 {
 			continue
@@ -424,12 +449,12 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 
 		packetSlice := avPacketToSlice(avPacket)
 		mediaSample := media.Sample{
-			Data: packetSlice,
+			Data:     packetSlice,
 			Duration: time.Duration(float64(time.Millisecond) * float64(videoDurationBetweenFrames)),
 			//Timestamp: time.Now(),
 			PacketTimestamp: uint32(i),
 		}
-		if ivfErr := vmi._videoTrack.WriteSample(mediaSample) ; ivfErr != nil {
+		if ivfErr := vmi._videoTrack.WriteSample(mediaSample); ivfErr != nil {
 			panic(ivfErr)
 		}
 	}
