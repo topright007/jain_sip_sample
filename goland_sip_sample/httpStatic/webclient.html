@@ -65,8 +65,6 @@
         //     }
         // };
 
-        console.log("peer connection initialized")
-
         async function sendOffer(offerSDP, candidates) {
             body = {
                 "offer": offerSDP,
@@ -92,15 +90,16 @@
             var audioDirection = "sendonly"
             var videoDirection = "inactive"
 
-            var audioChecked = document.getElementById("videoCheckbox").checked
+            var audioChecked = document.getElementById("audioCheckbox").checked
             var videoChecked = document.getElementById("videoCheckbox").checked
             if(audioChecked) {
                 audioDirection = "sendrecv"
-                var audioTransceiver = peerConnection.addTransceiver('audio', {
-                    direction: audioDirection,
-                    streams: [stream]
-                })
             }
+
+            var audioTransceiver = peerConnection.addTransceiver('audio', {
+                direction: audioDirection,
+                streams: [stream]
+            })
 
             if(videoChecked) {
                 videoDirection = "recvonly"
@@ -130,10 +129,7 @@
                 type: "answer"
             })
 
-            const constraints = {
-                video: true,audio : true
-            };
-
+            console.log("peer connection initialized")
         }
 
         function hangup() {

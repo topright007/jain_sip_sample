@@ -183,7 +183,12 @@ func prepareWebRTCInterceptors(mediaEngine *webrtc.MediaEngine) *interceptor.Reg
 	return interceptors
 }
 
-func preparePeerConnection(vmr *VoiceMenuResources, api *webrtc.API, iceConnectedCtxCancel context.CancelFunc, candidatesChannel chan string) *webrtc.PeerConnection {
+func preparePeerConnection(
+	vmr *VoiceMenuResources,
+	api *webrtc.API,
+	iceConnectedCtxCancel context.CancelFunc,
+	voiceMenuContextCancel context.CancelFunc,
+	candidatesChannel chan string) *webrtc.PeerConnection {
 
 	stunServers := vmr.getStunServers()
 	peerConnection, err := api.NewPeerConnection(webrtc.Configuration{
@@ -217,10 +222,12 @@ func preparePeerConnection(vmr *VoiceMenuResources, api *webrtc.API, iceConnecte
 			// Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
 			// Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
 			// Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+			voiceMenuContextCancel()
 			fmt.Println("Peer Connection has gone to failed exiting")
 		}
 
 		if s == webrtc.PeerConnectionStateClosed {
+			voiceMenuContextCancel()
 			// PeerConnection was explicitly closed. This usually happens from a DTLS CloseNotify
 			fmt.Println("Peer Connection has gone to closed")
 		}
@@ -253,7 +260,7 @@ func (vmi *VoiceMenuInstance) prepareEncoder() {
 }
 
 func initMediaTrack(
-	peerConnection *webrtc.PeerConnection,
+	pc *webrtc.PeerConnection,
 	codecCapability webrtc.RTPCodecCapability,
 	id string,
 	streamId string) (*webrtc.TrackLocalStaticSample, *webrtc.RTPSender) {
@@ -266,7 +273,7 @@ func initMediaTrack(
 		panic(trackErr)
 	}
 
-	rtpSender, trackErr := peerConnection.AddTrack(track)
+	rtpSender, trackErr := pc.AddTrack(track)
 	if trackErr != nil {
 		panic(trackErr)
 	}
@@ -314,11 +321,62 @@ func NewVoiceMenuInstance(vmr *VoiceMenuResources, videoFPS int) *VoiceMenuInsta
 
 	go func() {
 		<-vmi._voiceMenuInstanceContext.Done()
-		logger.Info("Session timed out. Closing session")
+		logger.Info("Signal to close connection received. Closing session")
 		vmi.Close()
 	}()
 
 	return vmi
+}
+
+const (
+	rtpTransceiverDirectionSendrecvStr = "sendrecv"
+	rtpTransceiverDirectionSendonlyStr = "sendonly"
+	rtpTransceiverDirectionRecvonlyStr = "recvonly"
+	rtpTransceiverDirectionInactiveStr = "inactive"
+
+	sdpMediaTypeVideo = "video"
+	sdpMediaTypeAudio = "audio"
+)
+
+type MediaTrackInfo struct {
+	mediaType 		string
+	mid				string
+	bandwidth 		*uint64
+	direction		string
+}
+
+func (vmi *VoiceMenuInstance) collectTracks(offerStr string) []MediaTrackInfo {
+	var parsedSDP sdp.SessionDescription
+	if err := parsedSDP.Unmarshal(offerStr); err != nil {panic(err)}
+
+	var result []MediaTrackInfo
+	for _, mediaDescription:= range parsedSDP.MediaDescriptions {
+		var bandwidth *uint64 = nil
+		if len(mediaDescription.Bandwidth) > 0 {
+			bandwidth = &mediaDescription.Bandwidth[0].Bandwidth
+		}
+
+		mediaType := mediaDescription.MediaName.Media
+		var mid string
+		var direction string
+		for _, attr := range mediaDescription.Attributes {
+			switch attr.Key {
+			case "sendrecv", "sendonly", "recvonly", "inactive":
+				direction = attr.Key
+			case "mid":
+				mid = attr.Value
+			}
+		}
+		result = append(result, MediaTrackInfo{
+			mediaType: 	mediaType,
+			mid:		mid,
+			bandwidth:  bandwidth,
+			direction:  direction,
+		})
+		logger.Infof("Observed media with media type %s, mid %s, bandwidth %s and direction %s", mediaType, mid, bandwidth, direction)
+	}
+
+	return result
 }
 
 func (vmi *VoiceMenuInstance) connect(offerStr string, candidates []webrtc.ICECandidateInit, audio bool, video bool) string {
@@ -338,13 +396,12 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, candidates []webrtc.ICECa
 		webrtc.WithInterceptorRegistry(interceptors),
 	)
 
-	vmi._peerConnection = preparePeerConnection(vmi._vmr, apiWithSettings, iceConnectedCtxCancel, candidatesChannel)
-	if video {
-		vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
-	}
-	if audio {
-		vmi._audioTrack, vmi._audioTrackSender = initAudioTrack(vmi._peerConnection)
-	}
+	vmi._peerConnection = preparePeerConnection(
+		vmi._vmr,
+		apiWithSettings,
+		iceConnectedCtxCancel,
+		vmi._voiceMenuInstanceCancel,
+		candidatesChannel)
 
 	offer := webrtc.SessionDescription{
 		Type: webrtc.SDPTypeOffer,
@@ -359,6 +416,21 @@ func (vmi *VoiceMenuInstance) connect(offerStr string, candidates []webrtc.ICECa
 	// Set the remote SessionDescription
 	if err := vmi._peerConnection.SetRemoteDescription(offer); err != nil {
 		panic(err)
+	}
+
+	//just fill tracks with senders. API won't allow to carefuly map senders to mids here
+	for _, trackInfo := range vmi.collectTracks(offerStr) {
+		if trackInfo.direction == rtpTransceiverDirectionSendrecvStr ||
+			trackInfo.direction == rtpTransceiverDirectionRecvonlyStr {
+			switch trackInfo.mediaType {
+			case sdpMediaTypeAudio:
+				logger.Info("requested to play audio")
+				vmi._audioTrack, vmi._audioTrackSender = initAudioTrack(vmi._peerConnection)
+			case sdpMediaTypeVideo:
+				logger.Info("requested to play video")
+				vmi._videoTrack, vmi._videoTrackSender = initVideoTrack(vmi._peerConnection)
+			}
+		}
 	}
 
 	answer, err := vmi._peerConnection.CreateAnswer(&webrtc.AnswerOptions{})
