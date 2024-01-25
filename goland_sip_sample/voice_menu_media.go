@@ -129,6 +129,11 @@ func prepareSettingsEngine() webrtc.SettingEngine {
 			//"ice": logging.LogLevelDebug,
 		},
 	}
+
+	if err := settingEngine.SetEphemeralUDPPortRange(10000, 10000); err != nil {
+		panic(err)
+	}
+
 	return settingEngine
 }
 

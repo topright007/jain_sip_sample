@@ -25,6 +25,8 @@
             if(stunServers && stunServers.length > 0) {
                 console.log("Using stun server " + stunServers[0])
                 configuration = {'iceServers': [{'urls': stunServers[0]}]}
+            } else {
+                console.log("Not using stun server")
             }
 
             var peerConnection = new RTCPeerConnection(configuration);
