@@ -19,14 +19,16 @@ import (
 	"io/ioutil"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
 const (
-	greetingAudioFileName = "./resources/greeting.ogg"
-	dtmfAudioFileName     = "./resources/dtmf.ogg"
-	fontFile              = "./resources/JetBrainsMono-Regular.ttf"
-	audioOggPageDuration  = time.Millisecond * 20
+	greetingAudioFileName     = "./resources/greeting.ogg"
+	dtmfAudioFileName         = "./resources/dtmf.ogg"
+	durationWarnAudioFileName = "./resources/durationWarn.ogg"
+	fontFile                  = "./resources/JetBrainsMono-Regular.ttf"
+	audioOggPageDuration      = time.Millisecond * 20
 )
 
 var (
@@ -44,10 +46,11 @@ type OggAudioPage struct {
 }
 
 type VoiceMenuResources struct {
-	greetingAudioPages []OggAudioPage
-	dtmfAudioPages     []OggAudioPage
-	defaultFont        *truetype.Font
-	stunServerAddress  string
+	greetingAudioPages     []OggAudioPage
+	dtmfAudioPages         []OggAudioPage
+	durationWarnAudioPages []OggAudioPage
+	defaultFont            *truetype.Font
+	stunServerAddress      string
 }
 
 func readOggFile(path string) []OggAudioPage {
@@ -86,6 +89,7 @@ func (vmr *VoiceMenuResources) getStunServers() []string {
 func (vmr *VoiceMenuResources) init() {
 	vmr.dtmfAudioPages = readOggFile(dtmfAudioFileName)
 	vmr.greetingAudioPages = readOggFile(greetingAudioFileName)
+	vmr.durationWarnAudioPages = readOggFile(durationWarnAudioFileName)
 
 	fontBytes, err := ioutil.ReadFile(fontFile)
 	if err != nil {
@@ -104,16 +108,42 @@ func (vmr *VoiceMenuResources) init() {
 }
 
 type VoiceMenuInstance struct {
-	_peerConnection        *webrtc.PeerConnection
-	_iceConnectedCtx       context.Context
-	_iceConnectedCtxCancel context.CancelFunc
-	_videoTrack            *webrtc.TrackLocalStaticSample
-	_videoTrackSender      *webrtc.RTPSender
-	_videoTrackFPS         int
-	_audioTrack            *webrtc.TrackLocalStaticSample
-	_audioTrackSender      *webrtc.RTPSender
-	_encoder               *Encoder
-	_vmr                   *VoiceMenuResources
+	_peerConnection           *webrtc.PeerConnection
+	_iceConnectedCtx          context.Context
+	_iceConnectedCtxCancel    context.CancelFunc
+	_voiceMenuInstanceContext context.Context
+	_voiceMenuInstanceCancel  context.CancelFunc
+	_videoTrack               *webrtc.TrackLocalStaticSample
+	_videoTrackSender         *webrtc.RTPSender
+	_videoTrackFPS            int
+	_audioTrack               *webrtc.TrackLocalStaticSample
+	_audioTrackSender         *webrtc.RTPSender
+	_encoder                  *Encoder
+	_vmr                      *VoiceMenuResources
+	_closed                   bool
+	_connectionReInitMutex    sync.RWMutex
+}
+
+func (vmi *VoiceMenuInstance) checkTimeout() bool {
+	if vmi._voiceMenuInstanceContext.Err() != nil {
+		return false
+	}
+	return true
+}
+
+func (vmi *VoiceMenuInstance) Close() {
+	if vmi._closed {
+		return
+	}
+	vmi._connectionReInitMutex.Lock()
+	defer vmi._connectionReInitMutex.Unlock()
+
+	vmi._closed = true
+	vmi._voiceMenuInstanceCancel()
+	vmi._encoder.Close()
+	if err := vmi._peerConnection.Close(); err != nil {
+		logger.Errorf("Failed to close peer connection")
+	}
 }
 
 func prepareSettingsEngine() webrtc.SettingEngine {
@@ -275,11 +305,25 @@ func NewVoiceMenuInstance(vmr *VoiceMenuResources, videoFPS int) *VoiceMenuInsta
 	var vmi = &VoiceMenuInstance{}
 	vmi._vmr = vmr
 	vmi._videoTrackFPS = videoFPS
+	vmi._closed = false
+
+	vmi._voiceMenuInstanceContext, vmi._voiceMenuInstanceCancel = context.WithTimeout(
+		context.Background(),
+		time.Minute*2,
+	)
+
+	go func() {
+		<-vmi._voiceMenuInstanceContext.Done()
+		logger.Info("Session timed out. Closing session")
+		vmi.Close()
+	}()
+
 	return vmi
 }
 
 func (vmi *VoiceMenuInstance) connect(offerStr string, candidates []webrtc.ICECandidateInit, audio bool, video bool) string {
 	iceConnectedCtx, iceConnectedCtxCancel := context.WithCancel(context.Background())
+
 	vmi._iceConnectedCtx = iceConnectedCtx
 	vmi._iceConnectedCtxCancel = iceConnectedCtxCancel
 	candidatesChannel := make(chan string)
@@ -365,18 +409,11 @@ func playbackTrack(vmi *VoiceMenuInstance, track []OggAudioPage) {
 
 	for frameIdx := 0; frameIdx < totalPages; frameIdx++ {
 		<-ticker.C
-
-		page := track[frameIdx]
-
-		// The amount of samples is the difference between the last and current timestamp
-		sampleCount := float64(page.pageHeader.GranulePosition - lastGranule)
-		lastGranule = page.pageHeader.GranulePosition
-		sampleDuration := time.Duration(sampleCount/48) * time.Millisecond
-		logger.Info("Sample duration ", sampleDuration, " Granule Position: ", page.pageHeader.GranulePosition)
-
-		if err := vmi._audioTrack.WriteSample(media.Sample{Data: page.pageData, Duration: sampleDuration}); err != nil {
-			panic(err)
+		if !vmi.checkTimeout() {
+			return
 		}
+
+		vmi.presentAudioFrame(track, frameIdx, &lastGranule)
 	}
 }
 
@@ -394,9 +431,21 @@ func (vmi *VoiceMenuInstance) StartAudioPlayback() {
 	//time.Sleep(time.Duration(10) * time.Second)
 
 	playbackTrack(vmi, vmi._vmr.greetingAudioPages)
+
+	if !vmi.checkTimeout() {
+		return
+	}
+
+	time.Sleep(time.Second * 2)
+
+	playbackTrack(vmi, vmi._vmr.durationWarnAudioPages)
+
 	//playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
 	for true {
 		time.Sleep(time.Second * 5)
+		if !vmi.checkTimeout() {
+			return
+		}
 		playbackTrack(vmi, vmi._vmr.dtmfAudioPages)
 	}
 
@@ -427,40 +476,73 @@ func (vmi *VoiceMenuInstance) StartVideoPlayback() {
 
 	ticker := time.NewTicker(time.Millisecond * time.Duration(videoDurationBetweenFrames))
 	for i := 0; true; i++ {
-		inputImage := vmi._encoder.inputImage
-
-		xShift := 2*i%(inputImage.Bounds().Dx()-200) + 100
-
-		draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
-		draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
-		addLabel(vmi._vmr, inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!", RGBA_COLOR_ORANGE)
-		addLabel(vmi._vmr, inputImage, 200, 200, fmt.Sprintf("Frame number %d", i), RGBA_COLOR_ORANGE)
-		addLabel(vmi._vmr, inputImage, 200, 300, "public void JetBrainsMonoSpace(int here) { print(\"Hello World!\"); }", RGBA_COLOR_BLACK)
-
-		//sometimes ffmpeg skips frames
-
-		vmi._encoder.initPacket(avPacket, i)
-
-		err, outSize := vmi._encoder.WriteFrame(avPacket)
-		if err != nil {
-			panic(err)
+		if !vmi.checkTimeout() {
+			return
 		}
-		//keep feeding frames to ffmpeg, but don't display blanks
-		if outSize < 0 {
-			continue
-		}
+		vmi.presentVideoFrame(i, avPacket, ticker, videoDurationBetweenFrames)
+	}
+}
 
-		<-ticker.C
+// separate function to defer mutex unlock
+func (vmi *VoiceMenuInstance) presentVideoFrame(i int, avPacket H264Packet, ticker *time.Ticker, videoDurationBetweenFrames float32) {
+	vmi._connectionReInitMutex.RLock()
+	defer vmi._connectionReInitMutex.RUnlock()
 
-		packetSlice := avPacketToSlice(avPacket)
-		mediaSample := media.Sample{
-			Data:     packetSlice,
-			Duration: time.Duration(float64(time.Millisecond) * float64(videoDurationBetweenFrames)),
-			//Timestamp: time.Now(),
-			PacketTimestamp: uint32(i),
-		}
-		if ivfErr := vmi._videoTrack.WriteSample(mediaSample); ivfErr != nil {
-			panic(ivfErr)
-		}
+	inputImage := vmi._encoder.inputImage
+
+	xShift := 2*i%(inputImage.Bounds().Dx()-200) + 100
+
+	draw.Draw(inputImage, inputImage.Bounds(), &image.Uniform{RGBA_COLOR_GRAD_LIGHT}, image.Point{}, draw.Src)
+	draw.Draw(inputImage, image.Rect(xShift, 110, 100+xShift, 150), &image.Uniform{RGBA_COLOR_ORANGE}, image.Point{}, draw.Src)
+	addLabel(vmi._vmr, inputImage, xShift, 100, "heyhey!!! DTMF coming soon!!!", RGBA_COLOR_ORANGE)
+	addLabel(vmi._vmr, inputImage, 200, 200, fmt.Sprintf("Frame number %d", i), RGBA_COLOR_ORANGE)
+	addLabel(vmi._vmr, inputImage, 200, 300, "public void JetBrainsMonoSpace(int here) { print(\"Hello World!\"); }", RGBA_COLOR_BLACK)
+
+	//sometimes ffmpeg skips frames
+
+	vmi._encoder.initPacket(avPacket, i)
+
+	err, outSize := vmi._encoder.WriteFrame(avPacket)
+	if err != nil {
+		panic(err)
+	}
+	//keep feeding frames to ffmpeg, but don't display blanks
+	if outSize < 0 {
+		return
+	}
+
+	//release lock while waiting for ticker
+	vmi._connectionReInitMutex.RUnlock()
+
+	<-ticker.C
+
+	vmi._connectionReInitMutex.RLock()
+
+	packetSlice := avPacketToSlice(avPacket)
+	mediaSample := media.Sample{
+		Data:     packetSlice,
+		Duration: time.Duration(float64(time.Millisecond) * float64(videoDurationBetweenFrames)),
+		//Timestamp: time.Now(),
+		PacketTimestamp: uint32(i),
+	}
+	if ivfErr := vmi._videoTrack.WriteSample(mediaSample); ivfErr != nil {
+		panic(ivfErr)
+	}
+}
+
+func (vmi *VoiceMenuInstance) presentAudioFrame(track []OggAudioPage, frameIdx int, lastGranule *uint64) {
+	vmi._connectionReInitMutex.RLock()
+	defer vmi._connectionReInitMutex.RUnlock()
+
+	page := track[frameIdx]
+
+	// The amount of samples is the difference between the last and current timestamp
+	sampleCount := float64(page.pageHeader.GranulePosition - *lastGranule)
+	*lastGranule = page.pageHeader.GranulePosition
+	sampleDuration := time.Duration(sampleCount/48) * time.Millisecond
+	logger.Trace("Sample duration ", sampleDuration, " Granule Position: ", page.pageHeader.GranulePosition)
+
+	if err := vmi._audioTrack.WriteSample(media.Sample{Data: page.pageData, Duration: sampleDuration}); err != nil {
+		panic(err)
 	}
 }

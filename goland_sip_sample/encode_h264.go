@@ -52,11 +52,11 @@ type Encoder struct {
 	_swscontext *C.SwsContext
 	_frame      *C.AVFrame
 
-	_outbuf     *C.uint8_t
-	_outbuflen  C.int
+	_outbuf    *C.uint8_t
+	_outbuflen C.int
 
-	inputImage  *image.RGBA
-	_input_data **C.uint8_t
+	inputImage      *image.RGBA
+	_input_data     **C.uint8_t
 	_input_linesize [1]C.int
 }
 
@@ -130,9 +130,9 @@ type YCbCrWithSet struct {
 
 func (p *YCbCrWithSet) Set(x int, y int, c color.Color) {
 	c1 := color.YCbCrModel.Convert(c).(color.YCbCr)
-	p.Y[p.YOffset(x,y)] = c1.Y
-	p.Cb[p.COffset(x,y)] = c1.Cb
-	p.Cr[p.COffset(x,y)] = c1.Cr
+	p.Y[p.YOffset(x, y)] = c1.Y
+	p.Cb[p.COffset(x, y)] = c1.Cb
+	p.Cr[p.COffset(x, y)] = c1.Cr
 }
 
 func NewEncoder(codec uint32, inputImage *image.RGBA, fps int) (*Encoder, error) {
@@ -154,15 +154,15 @@ func NewEncoder(codec uint32, inputImage *image.RGBA, fps int) (*Encoder, error)
 	avContext.width = C.int(width)
 	avContext.height = C.int(height)
 	avContext.time_base = C.AVRational{1, C.int(fps)} // FPS
-	avContext.gop_size = 100                   // emit one intra frame every ten frames
+	avContext.gop_size = 100                          // emit one intra frame every ten frames
 	avContext.max_b_frames = 0
 	avContext.delay = 0
 
 	avContext.pix_fmt = C.AV_PIX_FMT_YUV420P
-	avContext.bit_rate = C.long(10485760)		//10 MBit
+	avContext.bit_rate = C.long(10485760) //10 MBit
 
-	C.av_opt_set(avContext.priv_data, C.CString("preset"), C.CString("ultrafast"), 0);
-	C.av_opt_set(avContext.priv_data, C.CString("tune"), C.CString("zerolatency"), 0);
+	C.av_opt_set(avContext.priv_data, C.CString("preset"), C.CString("ultrafast"), 0)
+	C.av_opt_set(avContext.priv_data, C.CString("tune"), C.CString("zerolatency"), 0)
 
 	avFrame := C.av_frame_alloc()
 	if avFrame == nil {
@@ -189,7 +189,6 @@ func NewEncoder(codec uint32, inputImage *image.RGBA, fps int) (*Encoder, error)
 
 	videoEncodeBufLen := C.int(1024 * 1024)
 	videoEncodeBuf := (*C.uint8_t)(C.av_malloc(C.ulong(videoEncodeBufLen)))
-
 
 	input_data := (**C.uint8_t)(C.wrapWithArray(ptr(inputImage.Pix)))
 	input_linesize := [1]C.int{C.int(inputImage.Bounds().Dx() * 4)}
@@ -261,7 +260,7 @@ func doEncodeVideo(e *Encoder, packet *C.AVPacket) (error, int) {
 			0
 	}
 
-	logger.Info("successfully encoded frame."+
+	logger.Trace("successfully encoded frame."+
 		"\npresentation ts: ", packet.pts,
 		"\nstream index: ", packet.stream_index,
 		"\npacket duration: ", packet.duration,
