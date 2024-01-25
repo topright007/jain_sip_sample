@@ -14,6 +14,8 @@
             candidatesGatheredHook = resolve
         })
 
+        var peerConnection
+
         async function newPeerConnection() {
             var stunServersResponse = await fetch("/stunServers", {
                 method: "GET",
@@ -83,11 +85,35 @@
 
 
         async function setUpConnection() {
-            var peerConnection = await newPeerConnection()
+            peerConnection = await newPeerConnection()
+
+            var stream = new MediaStream()
+
+            var audioDirection = "sendonly"
+            var videoDirection = "inactive"
+
+            var audioChecked = document.getElementById("videoCheckbox").checked
+            var videoChecked = document.getElementById("videoCheckbox").checked
+            if(audioChecked) {
+                audioDirection = "sendrecv"
+                var audioTransceiver = peerConnection.addTransceiver('audio', {
+                    direction: audioDirection,
+                    streams: [stream]
+                })
+            }
+
+            if(videoChecked) {
+                videoDirection = "recvonly"
+                peerConnection.addTransceiver('video', {
+                    direction: videoDirection,
+                    streams: [stream]
+                })
+            }
+
             var offer = await peerConnection.createOffer({
                 iceRestart: false,
-                offerToReceiveVideo: true,
-                offerToReceiveAudio: true
+                // offerToReceiveVideo: videoChecked,
+                // offerToReceiveAudio: audioChecked
             })
 
             console.log("offer generated: " + offer.sdp)
@@ -110,9 +136,10 @@
 
         }
 
-        setInterval(() => {
-            console.log("currently decoded: " + document.getElementById("videoElement").framesDecoded )
-        },1000)
+        function hangup() {
+            document.getElementById("videoElement").srcObject = null;
+            peerConnection.close();
+        }
 
         // setUpConnection().then( _ => {
         //     console.log("connection setup done")
@@ -121,7 +148,21 @@
 
 </head>
 <body>
-<button onclick="setUpConnection()">click me</button><br/>
+<table>
+    <tr><td>
+        <input id="videoCheckbox" type="checkbox" checked><label for="videoCheckbox">Play Video</label>
+    </td></tr>
+    <tr><td>
+        <input id="audioCheckbox" type="checkbox" checked><label for="audioCheckbox">Play Audio</label>
+    </td></tr>
+<tr>
+    <td>
+<button onclick="setUpConnection()" style = "width: 100px; height: 30px">play</button>
+<button onclick="hangup()" style = "width: 100px; height: 30px">stop</button>
+    </td>
+</tr>
+
+</table>
 <video id = "videoElement" style="height: 720px;width: 1280px;border: 1px solid red; background-color: lightblue"></video>
 </body>
 </html>
